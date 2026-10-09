@@ -94,11 +94,11 @@ node scripts/smoke-packaged.cjs "release/win-unpacked/Cute Island.exe"
 
 它验证启动前会话恢复、HTTP、preload、展开/关闭、成功自动收起和空闲布局开销，并将截图存入 `release/`。
 
-推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.1`。
+推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.2`。
 
 ```bash
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.1.2
+git push origin v0.1.2
 ```
 
 ## 图标

@@ -1,6 +1,6 @@
 {
   "name": "cute-island",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "跨平台 PC 灵动岛，展示 agent 执行状态",
   "author": "Cute Island <xihadance@gmail.com>",
@@ -40,7 +40,11 @@
     ],
     "asar": true,
     "compression": "maximum",
-    "electronLanguages": ["en-US", "zh-CN", "zh-TW"],
+    "electronLanguages": [
+      "en-US",
+      "zh-CN",
+      "zh-TW"
+    ],
     "npmRebuild": false,
     "linux": {
       "target": [
