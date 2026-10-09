@@ -2,6 +2,57 @@ import { describe, expect, it } from 'vitest'
 import { parseTranscript } from './parse'
 
 describe('parseTranscript', () => {
+  it('recognizes explicit completion in interactive Claude transcripts', () => {
+    expect(parseTranscript('claude', 'completed', JSON.stringify({ type: 'assistant', message: {
+      stop_reason: 'end_turn', content: [{ type: 'text', text: '已经完成' }]
+    } }))).toMatchObject({ state: 'success', terminal: true, title: '已经完成' })
+  })
+
+  it('ignores system and developer prompt records', () => {
+    expect(parseTranscript('codex', 'prompt', JSON.stringify({ type: 'response_item', payload: {
+      type: 'message', role: 'developer', content: [{ type: 'text', text: 'Instructions' }]
+    } }))).toBeNull()
+  })
+
+  it('recognizes Codex final answers and completion summaries', () => {
+    expect(parseTranscript('codex', 'done', JSON.stringify({ type: 'response_item', payload: {
+      type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: '已完成检查' }]
+    } }))).toMatchObject({ state: 'success', terminal: true, title: '已完成检查' })
+    expect(parseTranscript('codex', 'done', JSON.stringify({ type: 'event_msg', payload: {
+      type: 'task_complete', last_agent_message: '修复已完成'
+    } }))).toMatchObject({ title: '修复已完成' })
+  })
+
+  it('reads Gemini JSON documents without duplicating tool calls or hiding them behind text', () => {
+    const document = { sessionId: 'native', messages: [
+      { type: 'user', content: '检查文件' },
+      { type: 'gemini', content: '正在检查', toolCalls: [{ id: 'read', name: 'read_file', args: { path: 'app.ts' }, status: 'executing' }] }
+    ] }
+    const view = parseTranscript('gemini', 'fallback', JSON.stringify(document, null, 2))
+    expect(view).toMatchObject({ id: 'gemini-native', state: 'running', detail: '检查文件', terminal: false })
+    expect(view?.steps).toHaveLength(1)
+    expect(parseTranscript('gemini', 'done', JSON.stringify({ messages: [{ type: 'gemini', content: '检查完成' }] }, null, 2)))
+      .toMatchObject({ state: 'success', terminal: true })
+  })
+
+  it('matches out-of-order parallel tool results to their call ids', () => {
+    const view = parseTranscript('claude', 'parallel', [
+      { type: 'assistant', message: { content: [
+        { type: 'tool_use', id: 'first', name: 'Read', input: { path: 'first.ts' } },
+        { type: 'tool_use', id: 'second', name: 'Read', input: { path: 'second.ts' } }
+      ] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'first', content: 'ok' }] } }
+    ].map((row) => JSON.stringify(row)).join('\n'))
+    expect(view?.steps.map((step) => step.status)).toEqual(['done', 'active'])
+  })
+
+  it('clears previous-turn steps when a new user request arrives', () => {
+    const view = parseTranscript('claude', 'next', [
+      { role: 'assistant', content: [{ type: 'tool_use', name: 'Read', input: {} }] },
+      { role: 'user', content: '开始新的任务' }
+    ].map((row) => JSON.stringify(row)).join('\n'))
+    expect(view).toMatchObject({ state: 'waiting', detail: '开始新的任务', steps: [] })
+  })
   it('reads a Claude Code tool call as running', () => {
     const view = parseTranscript(
       'claude',

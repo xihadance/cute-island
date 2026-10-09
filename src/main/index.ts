@@ -120,10 +120,11 @@ function createWindow(activityStore: ActivityStore): BrowserWindow {
   screen.on('display-metrics-changed', reposition)
   win.on('closed', () => {
     stopTracking()
+    unsubscribe()
     screen.off('display-metrics-changed', reposition)
     if (mainWindow === win) mainWindow = null
   })
-  activityStore.subscribe((activities) => {
+  const unsubscribe = activityStore.subscribe((activities) => {
     if (!win.isDestroyed()) win.webContents.send('island:activities', activities)
   })
   win.once('ready-to-show', () => {
@@ -185,7 +186,7 @@ function trackPointer(win: BrowserWindow): () => void {
   }
   ipcMain.on('island:interaction', onInteraction)
   const timer = setInterval(() => {
-    if (win.isDestroyed()) return
+    if (win.isDestroyed() || !win.isVisible()) return
     const point = screen.getCursorScreenPoint()
     const bounds = win.getBounds()
     const localX = point.x - bounds.x
@@ -203,7 +204,8 @@ function trackPointer(win: BrowserWindow): () => void {
       if (ignore) win.setIgnoreMouseEvents(true, { forward: true })
       else win.setIgnoreMouseEvents(false)
     }
-    const pointerKey = `${overWindow}:${overIsland}:${Math.round(localX)}:${Math.round(localY)}`
+    // The renderer only uses proximity to the top edge, not every global movement.
+    const pointerKey = `${overWindow}:${overIsland}:${overWindow && localY <= 72}`
     if (pointerKey === lastPointer || win.webContents.isDestroyed()) return
     lastPointer = pointerKey
     win.webContents.send('island:pointer', { x: localX, y: localY, overWindow, overIsland })
@@ -219,10 +221,9 @@ function isInteraction(value: unknown): value is Interaction {
   const hit = value as Partial<Interaction>
   return (
     typeof hit.expanded === 'boolean' &&
-    typeof hit.x === 'number' &&
-    typeof hit.y === 'number' &&
-    typeof hit.width === 'number' &&
-    typeof hit.height === 'number'
+    Number.isFinite(hit.x) && Number.isFinite(hit.y) &&
+    typeof hit.width === 'number' && Number.isFinite(hit.width) && hit.width >= 0 &&
+    typeof hit.height === 'number' && Number.isFinite(hit.height) && hit.height >= 0
   )
 }
 

@@ -12,14 +12,16 @@
     "dev": "electron-vite dev",
     "dev:web": "vite --config vite.web.config.ts",
     "build": "electron-vite build && npm run build:cli",
-    "build:cli": "esbuild src/cli.ts --bundle --platform=node --format=cjs --outfile=out/cli.cjs",
+    "build:cli": "esbuild src/cli.ts --bundle --minify --platform=node --format=cjs --outfile=out/cli.cjs",
+    "dist": "npm run typecheck && npm test && npm run build && electron-builder --publish never",
+    "pack": "npm run build && electron-builder --dir --publish never",
     "preview": "electron-vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "island": "tsx src/cli.ts"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "build": {
     "appId": "com.cuteisland.app",
@@ -30,10 +32,15 @@
       "buildResources": "build"
     },
     "files": [
-      "out/**/*",
+      "out/main/**/*",
+      "out/preload/**/*",
+      "out/renderer/**/*",
       "package.json"
     ],
     "asar": true,
+    "compression": "maximum",
+    "electronLanguages": ["en-US", "zh-CN", "zh-TW"],
+    "npmRebuild": false,
     "linux": {
       "target": [
         "AppImage",
@@ -58,12 +65,12 @@
     }
   },
   "dependencies": {
-    "framer-motion": "^14.0.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
     "ws": "^8.22.0"
   },
   "devDependencies": {
+    "framer-motion": "^14.0.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

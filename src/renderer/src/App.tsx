@@ -19,14 +19,15 @@ export function App() {
 
   useEffect(() => {
     let sawLiveEvent = false
+    let active = true
     const stop = bridge.onActivities((next) => {
       sawLiveEvent = true
       setActivities(next)
     })
     void bridge.getActivities().then((next) => {
-      if (!sawLiveEvent) setActivities(next)
-    })
-    return stop
+      if (active && !sawLiveEvent) setActivities(next)
+    }).catch(console.error)
+    return () => { active = false; stop() }
   }, [bridge])
 
   const primary = activities[0]
@@ -96,28 +97,23 @@ export function App() {
 
   useEffect(() => {
     if (!bridge.setInteraction) return
-    let frame = 0
+    const element = document.querySelector('[data-testid="island"]')
+    if (!element) return
     let last = ''
-    const tick = (): void => {
-      const element = document.querySelector('[data-testid="island"]')
-      if (element) {
-        const rect = element.getBoundingClientRect()
-        const next = `${expanded}:${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}`
-        if (next !== last) {
-          last = next
-          bridge.setInteraction?.({
-            expanded,
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height
-          })
-        }
+    const syncBounds = (): void => {
+      const rect = element.getBoundingClientRect()
+      const next = `${expanded}:${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}`
+      if (next !== last) {
+        last = next
+        bridge.setInteraction?.({ expanded, x: rect.x, y: rect.y, width: rect.width, height: rect.height })
       }
-      frame = window.requestAnimationFrame(tick)
     }
-    tick()
-    return () => window.cancelAnimationFrame(frame)
+    // Spring animations resize the island; an idle island needs no layout polling.
+    const observer = new ResizeObserver(syncBounds)
+    observer.observe(element)
+    window.addEventListener('resize', syncBounds)
+    syncBounds()
+    return () => { observer.disconnect(); window.removeEventListener('resize', syncBounds) }
   }, [bridge, expanded])
 
   const toggle = (): void => {

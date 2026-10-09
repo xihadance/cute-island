@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import WebSocket from 'ws'
 import { ActivityStore } from '../shared/activity'
 import { startStatusServer, type StatusServer } from './server'
@@ -81,6 +81,23 @@ describe('status server', () => {
     } finally {
       socket.close()
     }
+  })
+
+  it('reports malformed URL ids as a client error', async () => {
+    const server = await startStatusServer(new ActivityStore(), { port: 0 })
+    servers.push(server)
+    expect((await post(server.port, '/v1/activities/%ZZ/end', { result: 'success' })).status).toBe(400)
+  })
+
+  it('releases a failed startup subscription and closes idempotently', async () => {
+    const store = new ActivityStore()
+    const server = await startStatusServer(store, { port: 0 })
+    servers.push(server)
+    const unsubscribe = vi.fn()
+    vi.spyOn(store, 'subscribe').mockReturnValue(unsubscribe)
+    await expect(startStatusServer(store, { port: server.port })).rejects.toThrow()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    await Promise.all([server.close(), server.close()])
   })
 })
 

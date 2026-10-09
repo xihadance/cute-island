@@ -326,7 +326,8 @@ body[data-surface='web'] {
   text-overflow: ellipsis;
 }
 
-.island-error .compact-title,
+.island-error[data-mode='compact'] .compact-title,
+.session-row[data-state='error'] .compact-title,
 .island-error .expanded-title {
   color: #ff6961;
 }

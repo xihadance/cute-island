@@ -25,6 +25,7 @@ interface AgentEvent {
   kind: 'user' | 'thinking' | 'text' | 'tool' | 'tool_result' | 'done' | 'error'
   title: string
   ok?: boolean
+  callId?: string
 }
 
 const TOOL_LABEL: Record<string, string> = {
@@ -49,7 +50,18 @@ const TOOL_LABEL: Record<string, string> = {
 }
 
 export function parseTranscript(kind: AgentKind, sessionId: string, text: string): SessionView | null {
-  const events = text
+  // Gemini persists a pretty-printed JSON document, unlike the JSONL agents.
+  let rows: unknown[] | undefined
+  if (kind === 'gemini') {
+    try {
+      const document: unknown = JSON.parse(text)
+      if (isRecord(document) && Array.isArray(document.messages)) {
+        rows = document.messages
+        sessionId = textOf(document.sessionId) || sessionId
+      }
+    } catch { /* JSONL or a document that is still being written. */ }
+  }
+  const events = rows ? rows.flatMap(eventsFromRow) : text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -91,9 +103,21 @@ function eventsFromRow(row: unknown): AgentEvent[] {
   const message = isRecord(row.message) ? row.message : row
   const role = textOf(row.role) || textOf(message.role) || textOf(row.type)
   const content = message.content ?? row.content ?? row.parts ?? message.parts
-  if (Array.isArray(row.toolCalls)) events.push(...eventsFromToolCalls(row.toolCalls))
-  if (Array.isArray(message.toolCalls)) events.push(...eventsFromToolCalls(message.toolCalls))
+  if (role === 'system' || role === 'developer' || role === 'info') return []
+  if (Array.isArray(row.thoughts)) {
+    for (const thought of row.thoughts) {
+      if (isRecord(thought)) events.push({ kind: 'thinking', title: cleanText(textOf(thought.subject) || textOf(thought.description)) || '思考中' })
+    }
+  }
   events.push(...eventsFromContent(content, role))
+  if (Array.isArray(row.toolCalls)) events.push(...eventsFromToolCalls(row.toolCalls))
+  if (message !== row && Array.isArray(message.toolCalls)) events.push(...eventsFromToolCalls(message.toolCalls))
+  if (message.stop_reason === 'end_turn' || message.stop_reason === 'stop_sequence') {
+    events.push({ kind: 'done', title: '' })
+  }
+  if (row.type === 'gemini' && (!Array.isArray(row.toolCalls) || row.toolCalls.length === 0) && events.some((event) => event.kind === 'text')) {
+    events.push({ kind: 'done', title: '' })
+  }
   return events
 }
 
@@ -106,7 +130,7 @@ function eventsFromCodexEvent(payload: unknown): AgentEvent[] {
     return title ? [{ kind: type === 'agent_reasoning' ? 'thinking' : 'text', title }] : []
   }
   if (type === 'task_started') return [{ kind: 'thinking', title: '开始执行' }]
-  if (type === 'task_complete') return [{ kind: 'done', title: cleanText(textOf(payload.message)) || '已完成' }]
+  if (type === 'task_complete') return [{ kind: 'done', title: cleanText(textOf(payload.last_agent_message) || textOf(payload.message)) || '已完成' }]
   if (type === 'error' || type === 'turn_aborted') {
     return [{ kind: 'error', title: cleanText(textOf(payload.message) || textOf(payload.error)) || '执行失败' }]
   }
@@ -125,11 +149,11 @@ function eventsFromResponseItem(payload: unknown): AgentEvent[] {
   if (type === 'function_call' || type === 'custom_tool_call' || type === 'tool_call') {
     const name = textOf(payload.name) || 'tool'
     const input = parseMaybeRecord(payload.arguments ?? payload.input ?? payload.args)
-    return [{ kind: 'tool', title: toolTitle(name, input) }]
+    return [{ kind: 'tool', title: toolTitle(name, input), callId: textOf(payload.call_id) || undefined }]
   }
   if (type === 'function_call_output' || type === 'custom_tool_call_output' || type === 'tool_result') {
     const ok = payload.is_error !== true && payload.status !== 'error'
-    return [{ kind: 'tool_result', title: ok ? '工具完成' : '工具失败', ok }]
+    return [{ kind: 'tool_result', title: ok ? '工具完成' : '工具失败', ok, callId: textOf(payload.call_id) || undefined }]
   }
   if (type === 'reasoning') {
     const summary = Array.isArray(payload.summary) ? payload.summary : []
@@ -138,7 +162,9 @@ function eventsFromResponseItem(payload: unknown): AgentEvent[] {
   }
   if (type === 'message') {
     const role = textOf(payload.role)
-    return eventsFromContent(payload.content, role)
+    const events = eventsFromContent(payload.content, role)
+    if (role === 'assistant' && payload.phase === 'final_answer') events.push({ kind: 'done', title: '' })
+    return events
   }
   return []
 }
@@ -161,10 +187,12 @@ function eventsFromToolCalls(calls: unknown[]): AgentEvent[] {
     const name = textOf(call.name) || 'tool'
     const input = parseMaybeRecord(call.args ?? call.input ?? call.arguments)
     const status = textOf(call.status)
-    const events: AgentEvent[] = [{ kind: 'tool', title: toolTitle(name, input) }]
+    const callId = textOf(call.id) || undefined
+    const events: AgentEvent[] = [{ kind: 'tool', title: toolTitle(name, input), callId }]
     if (status === 'success' || status === 'error' || status === 'cancelled' || call.result !== undefined) {
       events.push({
         kind: 'tool_result',
+        callId,
         title: status === 'error' ? '工具失败' : '工具完成',
         ok: status !== 'error' && status !== 'cancelled'
       })
@@ -187,12 +215,12 @@ function eventsFromContent(content: unknown, role: string): AgentEvent[] {
       const call = isRecord(block.functionCall) ? block.functionCall : block
       const name = textOf(call.name) || 'tool'
       const input = parseMaybeRecord(call.input ?? call.args ?? call.arguments)
-      return [{ kind: 'tool' as const, title: toolTitle(name, input) }]
+      return [{ kind: 'tool' as const, title: toolTitle(name, input), callId: textOf(call.id) || undefined }]
     }
     if (block.type === 'tool_result' || isRecord(block.functionResponse)) {
       const response = isRecord(block.functionResponse) ? block.functionResponse : block
       const ok = block.is_error !== true && response.is_error !== true && !hasError(response.response)
-      return [{ kind: 'tool_result' as const, title: ok ? '工具完成' : '工具失败', ok }]
+      return [{ kind: 'tool_result' as const, title: ok ? '工具完成' : '工具失败', ok, callId: textOf(block.tool_use_id) || undefined }]
     }
     if (block.type === 'text' || block.text !== undefined) {
       return eventsFromText(textOf(block.text), role)
@@ -205,7 +233,8 @@ function eventsFromText(raw: string, role: string): AgentEvent[] {
   const title = cleanText(unwrapUserQuery(raw))
   if (!title || title === '[REDACTED]') return []
   if (role === 'user' || role === 'human') return [{ kind: 'user', title }]
-  return [{ kind: 'text', title }]
+  if (role === 'assistant' || role === 'model' || role === 'gemini') return [{ kind: 'text', title }]
+  return []
 }
 
 function endedEvent(status: unknown, message: unknown): AgentEvent {
@@ -218,6 +247,8 @@ function endedEvent(status: unknown, message: unknown): AgentEvent {
 
 function reduceEvents(events: AgentEvent[]): Omit<SessionView, 'id' | 'agent' | 'kind'> {
   const steps: ActivityStep[] = []
+  const calls = new Map<string, ActivityStep>()
+  let stepSequence = 0
   let title = '正在处理'
   let detail: string | undefined
   let state: ActivityState = 'thinking'
@@ -225,6 +256,8 @@ function reduceEvents(events: AgentEvent[]): Omit<SessionView, 'id' | 'agent' | 
 
   for (const event of events) {
     if (event.kind === 'user') {
+      steps.length = 0
+      calls.clear()
       detail = clip(event.title, 160)
       state = 'waiting'
       title = '等待回复'
@@ -240,12 +273,19 @@ function reduceEvents(events: AgentEvent[]): Omit<SessionView, 'id' | 'agent' | 
     if (event.kind === 'tool') {
       state = 'running'
       title = clip(event.title, 80)
-      steps.push({ id: `s${steps.length + 1}`, label: title, status: 'active' })
+      const step: ActivityStep = { id: `s${++stepSequence}`, label: title, status: 'active' }
+      steps.push(step)
+      if (event.callId) calls.set(event.callId, step)
       terminal = false
       continue
     }
     if (event.kind === 'tool_result') {
-      const open = [...steps].reverse().find((step) => step.status === 'active')
+      let open = event.callId ? calls.get(event.callId) : undefined
+      if (!event.callId) {
+        for (let index = steps.length - 1; index >= 0; index -= 1) {
+          if (steps[index].status === 'active') { open = steps[index]; break }
+        }
+      }
       if (open) open.status = event.ok === false ? 'error' : 'done'
       if (event.ok === false) {
         state = 'error'

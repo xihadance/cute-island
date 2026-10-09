@@ -56,6 +56,7 @@ export function Island({ activities, expanded, selectedId, resting, onToggle, on
         onToggle()
       }}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || stacked) return
         if (event.key !== 'Enter' && event.key !== ' ') return
         event.preventDefault()
         onToggle()
@@ -141,10 +142,11 @@ function SessionRow({
 }) {
   const appearance = agentAppearance(activity.agent)
   return (
-    <div className={`session-row${open ? ' open' : ''}`} data-testid="session-row" data-session={activity.id}>
+    <div className={`session-row${open ? ' open' : ''}`} data-testid="session-row" data-session={activity.id} data-state={activity.state}>
       <button
         type="button"
         className="session-line"
+        aria-expanded={open}
         onClick={(event) => {
           event.stopPropagation()
           onSelect()
@@ -189,7 +191,7 @@ function SessionRow({
 }
 
 function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () => void }) {
-  const elapsed = useElapsed(activity.startedAt)
+  const elapsed = useElapsed(activity.startedAt, activity.endedAt)
   const steps = activity.steps.slice(-4)
   const appearance = agentAppearance(activity.agent)
   return (
@@ -305,13 +307,14 @@ function stackHeight(activities: Activity[], selectedId: string | null): number 
   return Math.min(Math.max(height, 56), 520)
 }
 
-function useElapsed(startedAt: number): string {
+function useElapsed(startedAt: number, endedAt?: number): string {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
+    if (endedAt !== undefined) return
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
-  }, [])
-  return formatElapsed(now - startedAt)
+  }, [endedAt])
+  return formatElapsed((endedAt ?? now) - startedAt)
 }
 
 function formatElapsed(ms: number): string {

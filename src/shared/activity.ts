@@ -133,6 +133,7 @@ export class ActivityStore {
   private readonly listeners = new Set<(activities: Activity[]) => void>()
   private readonly dismissTimers = new Map<string, { cancel: () => void }>()
   private readonly dismissGeneration = new Map<string, number>()
+  private nextGeneration = 0
 
   constructor(
     private readonly schedule: Scheduler = defaultScheduler,
@@ -160,15 +161,16 @@ export class ActivityStore {
     const current = this.activities.get(parsed.id)
     const now = this.now()
     const state = parsed.state ?? current?.state ?? 'running'
+    const restarting = current?.endedAt !== undefined && state !== 'success' && state !== 'error'
     const next: Activity = {
       id: parsed.id,
       agent: parsed.agent ?? current?.agent ?? 'Agent',
       state,
       title: parsed.title ?? current?.title ?? defaultTitle(state),
       detail: resolveDetail(parsed, current),
-      progress: resolveProgress(parsed, current),
-      steps: parsed.steps ?? current?.steps.map((step) => ({ ...step })) ?? [],
-      startedAt: current?.startedAt ?? now,
+      progress: resolveProgress(parsed, restarting ? undefined : current),
+      steps: parsed.steps ?? (restarting ? [] : current?.steps.map((step) => ({ ...step }))) ?? [],
+      startedAt: restarting ? now : current?.startedAt ?? now,
       updatedAt: now
     }
     const terminal = state === 'success' || state === 'error'
@@ -220,17 +222,18 @@ export class ActivityStore {
 
   dispose(): void {
     for (const id of this.dismissTimers.keys()) this.clearTimer(id)
+    this.dismissGeneration.clear()
     this.listeners.clear()
   }
 
   private syncDismissTimer(activity: Activity): void {
     this.clearTimer(activity.id)
     if (activity.state !== 'success') return
-    const generation = (this.dismissGeneration.get(activity.id) ?? 0) + 1
+    const generation = ++this.nextGeneration
     this.dismissGeneration.set(activity.id, generation)
     const handle = this.schedule(() => {
-      this.dismissTimers.delete(activity.id)
       if (this.dismissGeneration.get(activity.id) !== generation) return
+      this.dismissTimers.delete(activity.id)
       if (this.activities.get(activity.id)?.state !== 'success') return
       this.activities.delete(activity.id)
       this.dismissGeneration.delete(activity.id)

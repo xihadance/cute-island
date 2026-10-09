@@ -114,6 +114,29 @@ describe('ActivityStore', () => {
     expect(() => store.end('missing', { result: 'error' })).toThrow(/找不到活动/)
   })
 
+  it('does not let a cancelled timer dismiss a recreated activity with the same id', () => {
+    const pending: Array<{ fn: () => void; cancelled: boolean }> = []
+    const store = new ActivityStore(schedulerOf(pending))
+    store.upsert({ id: 'reused', state: 'success' })
+    store.dismiss('reused')
+    store.upsert({ id: 'reused', state: 'success', title: '新的完成状态' })
+    pending[0].fn()
+    expect(store.get('reused')?.title).toBe('新的完成状态')
+    store.dispose()
+    expect(pending[1].cancelled).toBe(true)
+  })
+
+  it('resets elapsed time and stale progress when a completed session starts another turn', () => {
+    let now = 100
+    const store = new ActivityStore(() => ({ cancel() {} }), () => now)
+    store.upsert({ id: 'reused', state: 'running', steps: [{ id: 'old', label: '上轮步骤', status: 'active' }] })
+    store.end('reused', { result: 'success' })
+    now = 200
+    const next = store.upsert({ id: 'reused', state: 'thinking' })
+    expect(next).toMatchObject({ startedAt: 200, steps: [], progress: undefined })
+    expect(next.endedAt).toBeUndefined()
+  })
+
   it('rejects invalid payloads', () => {
     const store = new ActivityStore(() => ({ cancel() {} }))
     expect(() => store.upsert({ id: 'bad id', title: 'x' })).toThrow(/id/)

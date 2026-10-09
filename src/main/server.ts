@@ -55,6 +55,8 @@ export function startStatusServer(
   return new Promise((resolve, reject) => {
     const fail = (error: Error): void => {
       httpServer.off('error', fail)
+      unsubscribe()
+      wss.close()
       reject(error)
     }
     httpServer.once('error', fail)
@@ -65,9 +67,10 @@ export function startStatusServer(
         reject(new Error('状态服务没有拿到端口'))
         return
       }
+      let closing: Promise<void> | undefined
       resolve({
         port: address.port,
-        close: () => closeServer(httpServer, wss, sockets, unsubscribe)
+        close: () => closing ??= closeServer(httpServer, wss, sockets, unsubscribe)
       })
     })
   })
@@ -95,7 +98,9 @@ async function handleRequest(
     return
   }
   if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'activities' && parts[3] === 'end') {
-    const activity = store.end(decodeURIComponent(parts[2]), await readJson(req))
+    let id: string
+    try { id = decodeURIComponent(parts[2]) } catch { throw new ActivityError(400, 'id 编码无效') }
+    const activity = store.end(id, await readJson(req))
     sendJson(res, 200, { activity })
     return
   }
@@ -154,8 +159,11 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 function broadcast(sockets: Set<WebSocket>, activities: Activity[]): void {
+  if (sockets.size === 0) return
   const payload = JSON.stringify({ type: 'activities', activities })
   for (const socket of sockets) {
+    // Snapshots are replaceable; don't accumulate an unbounded queue for slow clients.
+    if (socket.bufferedAmount > 1_000_000) { socket.terminate(); continue }
     if (socket.readyState === socket.OPEN) socket.send(payload)
   }
 }
@@ -167,7 +175,7 @@ function closeServer(
   unsubscribe: () => void
 ): Promise<void> {
   unsubscribe()
-  for (const socket of sockets) socket.close()
+  for (const socket of sockets) socket.terminate()
   wss.close()
   return new Promise((resolve, reject) => {
     httpServer.close((error) => {
