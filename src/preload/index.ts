@@ -22,6 +22,18 @@ const island = {
     return () => {
       ipcRenderer.removeListener('island:activities', listener)
     }
+  },
+  setInteraction(hit: { expanded: boolean; x: number; y: number; width: number; height: number }): void {
+    ipcRenderer.send('island:interaction', hit)
+  },
+  onPointer(callback: (sample: { x: number; y: number; overWindow: boolean; overIsland: boolean }) => void): () => void {
+    const listener = (_event: IpcRendererEvent, sample: { x: number; y: number; overWindow: boolean; overIsland: boolean }): void => {
+      callback(sample)
+    }
+    ipcRenderer.on('island:pointer', listener)
+    return () => {
+      ipcRenderer.removeListener('island:pointer', listener)
+    }
   }
 }
 

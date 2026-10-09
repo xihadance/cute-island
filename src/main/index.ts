@@ -106,11 +106,13 @@ function createWindow(activityStore: ActivityStore): BrowserWindow {
   if (process.platform === 'darwin') win.setWindowButtonVisibility(false)
   placeWindow(win)
   win.setIgnoreMouseEvents(true, { forward: true })
+  const stopTracking = trackPointer(win)
   const reposition = (): void => {
     if (!win.isDestroyed()) placeWindow(win)
   }
   screen.on('display-metrics-changed', reposition)
   win.on('closed', () => {
+    stopTracking()
     screen.off('display-metrics-changed', reposition)
     if (mainWindow === win) mainWindow = null
   })
@@ -156,6 +158,65 @@ function reveal(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
   placeWindow(mainWindow)
   mainWindow.showInactive()
+}
+
+interface Interaction {
+  expanded: boolean
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function trackPointer(win: BrowserWindow): () => void {
+  let interaction: Interaction = { expanded: false, x: 0, y: 0, width: 0, height: 0 }
+  let ignoring = true
+  let lastPointer = ''
+  const onInteraction = (_event: Electron.IpcMainEvent, payload: unknown): void => {
+    if (!isInteraction(payload) || win.isDestroyed() || _event.sender !== win.webContents) return
+    interaction = payload
+  }
+  ipcMain.on('island:interaction', onInteraction)
+  const timer = setInterval(() => {
+    if (win.isDestroyed()) return
+    const point = screen.getCursorScreenPoint()
+    const bounds = win.getBounds()
+    const localX = point.x - bounds.x
+    const localY = point.y - bounds.y
+    const overWindow = localX >= 0 && localY >= 0 && localX <= bounds.width && localY <= bounds.height
+    const overIsland =
+      interaction.width > 0 &&
+      localX >= interaction.x &&
+      localY >= interaction.y &&
+      localX <= interaction.x + interaction.width &&
+      localY <= interaction.y + interaction.height
+    const ignore = interaction.expanded ? false : !overIsland
+    if (ignore !== ignoring) {
+      ignoring = ignore
+      if (ignore) win.setIgnoreMouseEvents(true, { forward: true })
+      else win.setIgnoreMouseEvents(false)
+    }
+    const pointerKey = `${overWindow}:${overIsland}:${Math.round(localX)}:${Math.round(localY)}`
+    if (pointerKey === lastPointer || win.webContents.isDestroyed()) return
+    lastPointer = pointerKey
+    win.webContents.send('island:pointer', { x: localX, y: localY, overWindow, overIsland })
+  }, 32)
+  return () => {
+    clearInterval(timer)
+    ipcMain.removeListener('island:interaction', onInteraction)
+  }
+}
+
+function isInteraction(value: unknown): value is Interaction {
+  if (!value || typeof value !== 'object') return false
+  const hit = value as Partial<Interaction>
+  return (
+    typeof hit.expanded === 'boolean' &&
+    typeof hit.x === 'number' &&
+    typeof hit.y === 'number' &&
+    typeof hit.width === 'number' &&
+    typeof hit.height === 'number'
+  )
 }
 
 function wireIpc(activityStore: ActivityStore): void {

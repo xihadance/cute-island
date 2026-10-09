@@ -46,6 +46,11 @@ export function App() {
   }, [primary, pointerNear, expanded])
 
   useEffect(() => {
+    if (bridge.onPointer) {
+      return bridge.onPointer((sample) => {
+        setPointerNear(sample.overWindow && sample.y <= 72)
+      })
+    }
     const syncIgnore = (overIsland: boolean): void => {
       hoveringRef.current = overIsland
       bridge.setIgnoreMouse(!(overIsland || expandedRef.current))
@@ -70,7 +75,34 @@ export function App() {
   }, [bridge])
 
   useEffect(() => {
+    if (bridge.onPointer) return
     bridge.setIgnoreMouse(!(hoveringRef.current || expanded))
+  }, [bridge, expanded])
+
+  useEffect(() => {
+    if (!bridge.setInteraction) return
+    let frame = 0
+    let last = ''
+    const tick = (): void => {
+      const element = document.querySelector('[data-testid="island"]')
+      if (element) {
+        const rect = element.getBoundingClientRect()
+        const next = `${expanded}:${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}`
+        if (next !== last) {
+          last = next
+          bridge.setInteraction?.({
+            expanded,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height
+          })
+        }
+      }
+      frame = window.requestAnimationFrame(tick)
+    }
+    tick()
+    return () => window.cancelAnimationFrame(frame)
   }, [bridge, expanded])
 
   const toggle = (): void => {
