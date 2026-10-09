@@ -77,11 +77,11 @@ npx electron-builder
 
 配置已经写好 Windows NSIS、macOS dmg、Linux AppImage 和 deb。三端安装包都用 `build/icon.png`。
 
-推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.0`。
+推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.1`。
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 ## 图标
