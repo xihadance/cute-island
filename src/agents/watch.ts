@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -20,7 +20,7 @@ export interface AgentRoots {
 export interface WatchOptions {
   roots?: AgentRoots
   now?: () => number
-  listProcesses?: () => Set<AgentKind>
+  listProcesses?: () => Set<AgentKind> | Promise<Set<AgentKind>>
   intervalMs?: number
   freshMs?: number
 }
@@ -46,11 +46,12 @@ export function defaultAgentRoots(home = homedir(), env: NodeJS.ProcessEnv = pro
 export class SessionWatcher {
   private readonly roots: AgentRoots
   private readonly now: () => number
-  private readonly listProcesses: () => Set<AgentKind>
+  private readonly listProcesses: () => Set<AgentKind> | Promise<Set<AgentKind>>
   private readonly intervalMs: number
   private readonly freshMs: number
   private readonly tracked = new Map<string, TrackedSession>()
   private timer: ReturnType<typeof setInterval> | undefined
+  private scanning = false
 
   constructor(
     private readonly store: ActivityStore,
@@ -65,8 +66,10 @@ export class SessionWatcher {
 
   start(): void {
     if (this.timer) return
-    this.scan()
-    this.timer = setInterval(() => this.scan(), this.intervalMs)
+    void this.scan()
+    this.timer = setInterval(() => {
+      void this.scan()
+    }, this.intervalMs)
     this.timer.unref?.()
   }
 
@@ -76,9 +79,19 @@ export class SessionWatcher {
     this.timer = undefined
   }
 
-  scan(): void {
+  async scan(): Promise<void> {
+    if (this.scanning) return
+    this.scanning = true
+    try {
+      await this.readSessions()
+    } finally {
+      this.scanning = false
+    }
+  }
+
+  private async readSessions(): Promise<void> {
     const now = this.now()
-    const running = this.listProcesses()
+    const running = await this.listProcesses()
     const seen = new Set<string>()
     for (const file of this.sessionFiles(now)) {
       const kind = file.kind
@@ -229,16 +242,18 @@ const PROCESS_KIND: Array<[RegExp, AgentKind]> = [
   [/(^|[\\/])agent(\.exe)?$/i, 'cursor']
 ]
 
-export function listAgentProcesses(): Set<AgentKind> {
-  try {
-    const output =
-      process.platform === 'win32'
-        ? execFileSync('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf8', timeout: 1500, windowsHide: true })
-        : execFileSync('ps', ['-ax', '-o', 'comm='], { encoding: 'utf8', timeout: 1500 })
-    return matchAgentProcesses(output)
-  } catch {
-    return new Set()
-  }
+export function listAgentProcesses(): Promise<Set<AgentKind>> {
+  const command = process.platform === 'win32' ? 'tasklist' : 'ps'
+  const args = process.platform === 'win32' ? ['/FO', 'CSV', '/NH'] : ['-ax', '-o', 'comm=']
+  return new Promise((resolve) => {
+    execFile(command, args, { encoding: 'utf8', timeout: 1500, windowsHide: true }, (error, stdout) => {
+      if (error || typeof stdout !== 'string') {
+        resolve(new Set())
+        return
+      }
+      resolve(matchAgentProcesses(stdout))
+    })
+  })
 }
 
 export function matchAgentProcesses(output: string): Set<AgentKind> {

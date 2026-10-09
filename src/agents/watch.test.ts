@@ -16,7 +16,7 @@ describe('SessionWatcher', () => {
     stores.length = 0
   })
 
-  it('notifies while Claude is editing and Codex is waiting, then records success once', () => {
+  it('notifies while Claude is editing and Codex is waiting, then records success once', async () => {
     const home = tempHome()
     const claudeFile = path.join(home.roots.claude, '-work', '11111111-1111-1111-1111-111111111111.jsonl')
     const codexFile = path.join(home.roots.codex, '2026', '10', '09', 'rollout-2026-10-09T08-00-00-22222222-2222-2222-2222-222222222222.jsonl')
@@ -32,7 +32,7 @@ describe('SessionWatcher', () => {
 
     const store = newStore()
     const watcher = watcherFor(store, home.roots, () => new Set<AgentKind>(['codex']))
-    watcher.scan()
+    await watcher.scan()
     expect(store.list().map((item) => [item.agent, item.state, item.title])).toEqual([
       ['Claude Code', 'running', '补上表单校验'],
       ['Codex', 'waiting', '等待回复']
@@ -45,16 +45,16 @@ describe('SessionWatcher', () => {
       }
     ])
     touch(claudeFile, NOW - 9_000)
-    watcher.scan()
+    await watcher.scan()
     const finished = store.get('claude-11111111-1111-1111-1111-111111111111')
     expect(finished).toMatchObject({ state: 'success', title: '登录页已更新' })
 
     const updatedAt = finished?.updatedAt
-    watcher.scan()
+    await watcher.scan()
     expect(store.get('claude-11111111-1111-1111-1111-111111111111')?.updatedAt).toBe(updatedAt)
   })
 
-  it('shows Gemini and Cursor sessions and ignores old history', () => {
+  it('shows Gemini and Cursor sessions and ignores old history', async () => {
     const home = tempHome()
     const geminiFile = path.join(home.roots.gemini, 'hash', 'chats', 'session-2026-10-09T08-00-abcd1234.jsonl')
     const cursorFile = path.join(
@@ -81,20 +81,20 @@ describe('SessionWatcher', () => {
     touch(oldFile, NOW - 10 * 60_000)
 
     const store = newStore()
-    watcherFor(store, home.roots).scan()
+    await watcherFor(store, home.roots).scan()
     expect(store.list().map((item) => [item.agent, item.state, item.title])).toEqual([
       ['Cursor', 'error', '无法写入文件'],
       ['Gemini', 'running', 'npm test']
     ])
   })
 
-  it('keeps a quiet file quiet until it belongs to a session we already showed', () => {
+  it('keeps a quiet file quiet until it belongs to a session we already showed', async () => {
     const home = tempHome()
     const file = path.join(home.roots.claude, 'proj', 'quiet.jsonl')
     writeJsonl(file, [{ type: 'assistant', message: { content: [{ type: 'text', text: '昨天就做完了' }] } }])
     touch(file, NOW - 30_000)
     const store = newStore()
-    watcherFor(store, home.roots).scan()
+    await watcherFor(store, home.roots).scan()
     expect(store.list()).toEqual([])
   })
 

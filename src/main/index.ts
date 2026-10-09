@@ -112,7 +112,7 @@ function createWindow(activityStore: ActivityStore): BrowserWindow {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   if (process.platform === 'darwin') win.setWindowButtonVisibility(false)
   placeWindow(win)
-  win.setIgnoreMouseEvents(true, { forward: true })
+  ignoreMouse(win, true)
   const stopTracking = trackPointer(win)
   const reposition = (): void => {
     if (!win.isDestroyed()) placeWindow(win)
@@ -161,6 +161,13 @@ function createTray(): Tray {
   return next
 }
 
+function ignoreMouse(win: BrowserWindow, ignore: boolean): void {
+  if (win.isDestroyed()) return
+  // Passing { forward: true } installs a global mouse hook. On Windows that hook
+  // runs on this process, so any pause here makes the cursor stutter everywhere.
+  win.setIgnoreMouseEvents(ignore)
+}
+
 function reveal(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
   placeWindow(mainWindow)
@@ -200,10 +207,10 @@ function trackPointer(win: BrowserWindow): () => void {
     const ignore = interaction.expanded ? false : !overIsland
     if (ignore !== ignoring) {
       ignoring = ignore
-      if (ignore) win.setIgnoreMouseEvents(true, { forward: true })
-      else win.setIgnoreMouseEvents(false)
+      ignoreMouse(win, ignore)
     }
-    const pointerKey = `${overWindow}:${overIsland}:${Math.round(localX)}:${Math.round(localY)}`
+    const nearTop = overWindow && localY <= 72
+    const pointerKey = `${nearTop}:${overIsland}`
     if (pointerKey === lastPointer || win.webContents.isDestroyed()) return
     lastPointer = pointerKey
     win.webContents.send('island:pointer', { x: localX, y: localY, overWindow, overIsland })
@@ -230,8 +237,7 @@ function wireIpc(activityStore: ActivityStore): void {
   ipcMain.on('island:set-ignore-mouse', (event, ignore: unknown) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win || win.isDestroyed()) return
-    if (ignore === true) win.setIgnoreMouseEvents(true, { forward: true })
-    else if (ignore === false) win.setIgnoreMouseEvents(false)
+    if (ignore === true || ignore === false) ignoreMouse(win, ignore)
   })
   ipcMain.handle('island:get-activities', () => activityStore.list())
   ipcMain.handle('island:dismiss', (_event, id: unknown) => {

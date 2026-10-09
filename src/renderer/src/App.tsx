@@ -96,28 +96,27 @@ export function App() {
 
   useEffect(() => {
     if (!bridge.setInteraction) return
-    let frame = 0
     let last = ''
-    const tick = (): void => {
+    const publish = (): void => {
       const element = document.querySelector('[data-testid="island"]')
-      if (element) {
-        const rect = element.getBoundingClientRect()
-        const next = `${expanded}:${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}`
-        if (next !== last) {
-          last = next
-          bridge.setInteraction?.({
-            expanded,
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height
-          })
-        }
-      }
-      frame = window.requestAnimationFrame(tick)
+      if (!element) return
+      const rect = element.getBoundingClientRect()
+      const next = `${expandedRef.current}:${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}`
+      if (next === last) return
+      last = next
+      bridge.setInteraction?.({
+        expanded: expandedRef.current,
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height
+      })
     }
-    tick()
-    return () => window.cancelAnimationFrame(frame)
+    publish()
+    const element = document.querySelector('[data-testid="island"]')
+    const observer = new ResizeObserver(() => publish())
+    if (element) observer.observe(element)
+    return () => observer.disconnect()
   }, [bridge, expanded])
 
   const toggle = (): void => {
