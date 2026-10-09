@@ -121,6 +121,20 @@ function createMockBridge(): IslandApi {
       store.upsert({ id: 'cap-agent', agent: 'Cursor', state: 'running', title: '子 Agent 正在检查测试',
         operation: { kind: 'agent', name: 'review_tests' } })
     },
+    simulateTasks() {
+      demoToken += 1
+      store.clear()
+      store.upsert({ id: 'tasks-codex', agent: 'Codex', state: 'running', title: '2 个子 Agent 进行中', detail: '并行校订 EP04-EP06',
+        steps: [{ id: 'spawn', label: '派生子 Agent', kind: 'agent', status: 'done' }, { id: 'wait', label: '等待子 Agent', kind: 'agent', status: 'done' }],
+        tasks: [
+          { id: 'dirac', kind: 'agent', label: 'Dirac', status: 'done', detail: 'EP04 已校订' },
+          { id: 'newton', kind: 'agent', label: 'Newton', status: 'active', detail: '读取 EP05 连续性上下文' },
+          { id: 'helmholtz', kind: 'agent', label: 'Helmholtz', status: 'active', detail: '校订 EP06 结尾' },
+          { id: 'cell-3', kind: 'command', label: 'npm test', status: 'error', detail: 'Exit code 1' }
+        ] })
+      store.upsert({ id: 'tasks-claude', agent: 'Claude Code', state: 'thinking', title: '整理调研结果',
+        tasks: [{ id: 'bash-1', kind: 'command', label: '构建项目', status: 'active' }] })
+    },
     simulateApproval() {
       demoToken += 1
       store.clear()

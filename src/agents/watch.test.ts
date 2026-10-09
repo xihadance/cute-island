@@ -222,6 +222,143 @@ describe('SessionWatcher', () => {
     expect(await readSession('codex', 'current', log, statSync(log).size)).toMatchObject({ state: 'running' })
   })
 
+  it('folds Claude sub-agent transcripts into the parent task instead of listing them', async () => {
+    const { roots } = tempHome()
+    const session = '44444444-4444-4444-4444-444444444444'
+    const parent = path.join(roots.claude, 'project', `${session}.jsonl`)
+    const child = path.join(roots.claude, 'project', session, 'subagents', 'agent-a1.jsonl')
+    writeJsonl(parent, [
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'call-1', name: 'Agent', input: { description: '调研', run_in_background: true } }] } },
+      { type: 'user', toolUseResult: { status: 'async_launched', agentId: 'a1' }, message: { content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'launched' }] } },
+      { type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: '已派出' }] } }
+    ])
+    writeJsonl(child, [{ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'WebSearch', input: { query: 'mcp servers' } }] } }])
+    writeFileSync(child.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ toolUseId: 'call-1', description: '调研' }))
+    touch(parent, NOW - 60_000)
+    touch(child, NOW)
+    const store = newStore()
+    await watcherFor(store, roots, () => new Set(['claude'])).scan()
+    expect(store.list()).toHaveLength(1)
+    expect(store.list()[0]).toMatchObject({ id: `claude-${session}`, state: 'running', title: '子 Agent 调研 进行中' })
+    expect(store.list()[0].tasks).toEqual([{ id: 'call-1', kind: 'agent', label: '调研', status: 'active', detail: '搜索网页 mcp servers' }])
+  })
+
+  it('links Codex sub-agent rollouts through session_meta and ends the parent with them', async () => {
+    const { roots } = tempHome()
+    const parentId = '01a0bca5-291e-7593-9d6d-6519591b7645'
+    const childId = '01a0bcd2-25bb-78c2-bc3e-2c8613e3352e'
+    const parent = path.join(roots.codex, '2026', '10', '09', `rollout-2026-10-09T08-00-00-${parentId}.jsonl`)
+    const child = path.join(roots.codex, '2026', '10', '09', `rollout-2026-10-09T08-01-00-${childId}.jsonl`)
+    writeJsonl(parent, [
+      { type: 'event_msg', payload: { type: 'item_completed', item: { type: 'CollabAgentToolCall', tool: 'spawn_agent', status: 'completed',
+        receiver_thread_ids: [childId], receiver_agents: [{ thread_id: childId, agent_nickname: 'Helmholtz' }] } } },
+      { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: '等待子代理' } }
+    ])
+    const meta = { type: 'session_meta', payload: { id: childId, parent_thread_id: parentId, agent_nickname: 'Helmholtz', base_instructions: { text: 'x'.repeat(40_000) } } }
+    writeJsonl(child, [meta, { type: 'response_item', payload: { type: 'reasoning', summary: [{ text: '校订 EP06' }] } }])
+    touch(parent, NOW - 30_000)
+    touch(child, NOW)
+    const store = newStore()
+    const watcher = watcherFor(store, roots, () => new Set(['codex']))
+    await watcher.scan()
+    expect(store.list()).toHaveLength(1)
+    expect(store.list()[0]).toMatchObject({ state: 'running', title: '子 Agent Helmholtz 进行中' })
+    expect(store.list()[0].tasks?.[0]).toMatchObject({ id: childId, status: 'active', detail: '校订 EP06' })
+
+    appendFileSync(child, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'EP06 完成' } }) + '\n')
+    await watcher.scan()
+    expect(store.list()[0]).toMatchObject({ state: 'success', title: '等待子代理' })
+    expect(store.list()[0].tasks?.[0]).toMatchObject({ status: 'done', detail: 'EP06 完成' })
+  })
+
+  it('treats growth as life when the file system does not bump mtime', async () => {
+    const { roots } = tempHome()
+    const file = path.join(roots.claude, 'project', 'stale.jsonl')
+    writeJsonl(file, [{ role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'npm test' } }] }])
+    touch(file, NOW)
+    let now = NOW
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => now, listProcesses: () => new Set(), processMs: 0 })
+    await watcher.scan()
+    now += 5 * 60_000
+    appendFileSync(file, JSON.stringify({ role: 'assistant', content: [{ type: 'thinking', thinking: '还在跑' }] }) + '\n')
+    touch(file, NOW)
+    await watcher.scan()
+    expect(store.list()[0]).toMatchObject({ state: 'thinking', title: '还在跑' })
+  })
+
+  it('recursively folds a busy grandchild and discovers its old ancestors', async () => {
+    const { roots } = tempHome()
+    const ids = ['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333']
+    const files = ids.map((id) => path.join(roots.codex, `rollout-${id}.jsonl`))
+    const spawn = (id: string) => ({ type: 'event_msg', payload: { type: 'item_completed', item: {
+      type: 'CollabAgentToolCall', tool: 'spawn_agent', status: 'completed', receiver_thread_ids: [id]
+    } } })
+    const meta = (index: number) => ({ type: 'session_meta', payload: { id: ids[index], parent_thread_id: ids[index - 1] } })
+    const done = { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: '本层工作完成' } }
+    writeJsonl(files[0], [spawn(ids[1]), done])
+    writeJsonl(files[1], [meta(1), spawn(ids[2]), done])
+    writeJsonl(files[2], [meta(2), { type: 'response_item', payload: { type: 'reasoning', summary: [{ text: '深层任务仍在执行' }] } }])
+    touch(files[0], NOW - 25 * 60 * 60_000)
+    touch(files[1], NOW - 25 * 60 * 60_000)
+    touch(files[2], NOW)
+    const store = newStore()
+    const watcher = watcherFor(store, roots, () => new Set(['codex']))
+    await watcher.scan()
+    expect(store.list()).toHaveLength(1)
+    expect(store.list()[0]).toMatchObject({ id: `codex-${ids[0]}`, state: 'running', tasks: [{ id: ids[1], status: 'active' }] })
+    appendFileSync(files[2], JSON.stringify(done) + '\n')
+    await watcher.scan()
+    expect(store.list()[0]).toMatchObject({ state: 'success', tasks: [{ id: ids[1], status: 'done' }] })
+  })
+
+  it('keeps long-silent tasks while Claude still registers the session as busy', async () => {
+    const { roots } = tempHome()
+    const id = '44444444-4444-4444-4444-444444444444'
+    const file = path.join(roots.claude, 'project', `${id}.jsonl`)
+    const registration = path.join(roots.claude, '..', 'sessions', `${process.pid}.json`)
+    writeJsonl(file, [
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'bg', name: 'Bash', input: { command: 'npm run build' } }] } },
+      { type: 'user', toolUseResult: { backgroundTaskId: 'build-1' }, message: { content: [{ type: 'tool_result', tool_use_id: 'bg', content: 'started' }] } },
+      { type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: '后台构建继续' }] } }
+    ])
+    touch(file, NOW - 31 * 60_000)
+    mkdirSync(path.dirname(registration), { recursive: true })
+    writeFileSync(registration, JSON.stringify({ pid: process.pid, sessionId: id, status: 'busy' }))
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => NOW, listProcesses: () => new Set(['claude']), processMs: 0 })
+    await watcher.scan()
+    expect(store.list()[0]).toMatchObject({ state: 'running', tasks: [{ id: 'bg', status: 'active' }] })
+    rmSync(registration)
+    await watcher.scan()
+    expect(store.list()[0]).toMatchObject({ state: 'success' })
+    expect(store.list()[0].tasks).toBeUndefined()
+  })
+
+  it('retries empty and partial Codex metadata instead of caching a top-level guess', async () => {
+    const { roots } = tempHome()
+    const parentId = '55555555-5555-5555-5555-555555555555'
+    const childId = '66666666-6666-6666-6666-666666666666'
+    const parent = path.join(roots.codex, `rollout-${parentId}.jsonl`)
+    const child = path.join(roots.codex, `rollout-${childId}.jsonl`)
+    writeJsonl(parent, [{ type: 'event_msg', payload: { type: 'task_started' } }])
+    writeFileSync(child, '')
+    touch(parent, NOW)
+    touch(child, NOW)
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => NOW, listProcesses: () => new Set(['codex']), discoveryMs: 0 })
+    await watcher.scan()
+    expect(store.list()).toHaveLength(1)
+    const meta = JSON.stringify({ type: 'session_meta', payload: { id: childId, parent_thread_id: parentId, agent_nickname: 'Test', base_instructions: { text: 'x'.repeat(40_000) } } }).replace(/:/g, ': ')
+    appendFileSync(child, meta.slice(0, 25))
+    await watcher.scan()
+    expect(store.list()).toHaveLength(1)
+    appendFileSync(child, meta.slice(25) + '\n' + JSON.stringify({ type: 'response_item', payload: { type: 'reasoning', summary: [{ text: '子任务已启动' }] } }) + '\n')
+    await watcher.scan()
+    expect(store.list()).toHaveLength(1)
+    expect(store.list()[0].tasks).toMatchObject([{ id: childId, status: 'active', detail: '子任务已启动' }])
+  })
+
   function newStore(): ActivityStore {
     const store = new ActivityStore(() => ({ cancel() {} }), () => NOW)
     stores.push(store)

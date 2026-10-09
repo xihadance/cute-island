@@ -178,6 +178,9 @@ export function App() {
           <button type="button" data-testid="simulate-capabilities" onClick={() => bridge.simulateCapabilities?.()}>
             MCP / Skill / 命令
           </button>
+          <button type="button" data-testid="simulate-tasks" onClick={() => bridge.simulateTasks?.()}>
+            子 Agent / 后台任务
+          </button>
           <button type="button" data-testid="simulate-approval" onClick={() => bridge.simulateApproval?.()}>
             需要审批
           </button>

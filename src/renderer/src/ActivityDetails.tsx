@@ -1,5 +1,51 @@
-import { OPERATION_LABEL, STATE_LABEL, type Activity } from '../../shared/activity'
+import { MAX_VISIBLE_TASKS, OPERATION_LABEL, STATE_LABEL, TASK_STATUS_LABEL, type Activity, type ActivityTask } from '../../shared/activity'
 import { ActivityIcon } from './activity-icons'
+
+/** Count of sub-agents and background commands still running, for compact rows. */
+export function TaskBadge({ activity }: { activity: Activity }) {
+  const active = activity.tasks?.filter((task) => task.status === 'active') ?? []
+  if (!active.length) return null
+  const agents = active.filter((task) => task.kind === 'agent').length
+  const label = agents === active.length ? `${agents} 个子 Agent 运行中` : `${active.length} 个后台任务运行中`
+  return (
+    <span className="task-badge" title={label} aria-label={label} data-testid="task-badge">
+      <ActivityIcon kind={agents ? 'agent' : 'command'} />
+      <span aria-hidden="true">{active.length}</span>
+    </span>
+  )
+}
+
+export function Tasks({ activity }: { activity: Activity }) {
+  const tasks = activity.tasks ?? []
+  if (!tasks.length) return null
+  // Running work first; the newest settled work fills any remaining rows.
+  const visible = [...tasks.filter((task) => task.status === 'active'), ...tasks.filter((task) => task.status !== 'active').reverse()]
+    .slice(0, MAX_VISIBLE_TASKS)
+  const active = tasks.filter((task) => task.status === 'active').length
+  return (
+    <section className="tasks" aria-label="子 Agent 与后台任务" data-testid="tasks">
+      <div className="tasks-heading">
+        <span>子 Agent 与后台任务</span>
+        <span>{active ? `${active} 个进行中` : '全部结束'}{tasks.length > visible.length ? ` · 共 ${tasks.length} 个` : ''}</span>
+      </div>
+      <ul>
+        {visible.map((task) => <TaskRow key={task.id} task={task} />)}
+      </ul>
+    </section>
+  )
+}
+
+function TaskRow({ task }: { task: ActivityTask }) {
+  const icon = task.status === 'active' ? task.kind : task.status
+  return (
+    <li data-status={task.status} data-kind={task.kind} title={task.detail ? `${task.label}\n${task.detail}` : task.label}>
+      <ActivityIcon kind={icon} animated={task.status === 'active'} />
+      <span className="task-label">{task.label}</span>
+      {task.detail && <span className="task-detail">{task.detail}</span>}
+      <span className="sr-only">{task.kind === 'agent' ? '子 Agent' : '后台命令'}，{TASK_STATUS_LABEL[task.status]}</span>
+    </li>
+  )
+}
 
 export function Status({ activity, compact = false }: { activity: Activity; compact?: boolean }) {
   const kind = activity.state === 'running' ? activity.operation?.kind ?? 'running' : activity.state

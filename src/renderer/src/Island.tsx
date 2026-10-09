@@ -1,9 +1,9 @@
 import { useEffect, useId, useState } from 'react'
 import { AnimatePresence, motion, type Transition } from 'framer-motion'
-import { expandedHeight, operationHeight, priorityRank, type Activity, type ActivityState } from '../../shared/activity'
+import { expandedHeight, operationHeight, priorityRank, tasksHeight, type Activity, type ActivityState } from '../../shared/activity'
 import { agentAppearance } from './agent-appearance'
 import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon } from './agent-icons'
-import { OperationDetails, Status, Steps } from './ActivityDetails'
+import { OperationDetails, Status, Steps, TaskBadge, Tasks } from './ActivityDetails'
 import { useIslandDrag } from './useIslandDrag'
 import type { IslandApi } from './env'
 
@@ -119,6 +119,7 @@ function Compact({ activity }: { activity: Activity }) {
       <span className="compact-title" data-testid="island-title">
         {activity.title}
       </span>
+      <TaskBadge activity={activity} />
       <Status activity={activity} compact />
     </div>
   )
@@ -178,6 +179,7 @@ function SessionRow({
           {appearance.short}
         </span>
         <span className="compact-title">{activity.title}</span>
+        <TaskBadge activity={activity} />
         <Status activity={activity} compact />
       </button>
       {open && (
@@ -186,6 +188,7 @@ function SessionRow({
           <OperationDetails activity={activity} />
           {typeof activity.progress === 'number' && <Progress value={activity.progress} />}
           <Steps activity={activity} />
+          <Tasks activity={activity} />
           {activity.state === 'error' && (
             <button
               type="button"
@@ -243,6 +246,7 @@ function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () =
       <OperationDetails activity={activity} />
       {typeof activity.progress === 'number' && <Progress value={activity.progress} />}
       <Steps activity={activity} />
+      <Tasks activity={activity} />
     </div>
   )
 }
@@ -310,6 +314,7 @@ function stackHeight(activities: Activity[], selectedId: string | null): number 
     if (selected.state === 'approval') height += 70
     if (typeof selected.progress === 'number') height += 28
     if (selected.steps.length) height += 4 + Math.min(selected.steps.length, 4) * 26
+    height += tasksHeight(selected.tasks)
     if (selected.state === 'error') height += 40
   }
   return Math.min(Math.max(height, 56), 520)

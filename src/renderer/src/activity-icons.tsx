@@ -1,6 +1,6 @@
-import type { ActivityState, OperationKind, StepStatus } from '../../shared/activity'
+import type { ActivityState, OperationKind, StepStatus, TaskStatus } from '../../shared/activity'
 
-type IconKind = ActivityState | OperationKind | StepStatus
+type IconKind = ActivityState | OperationKind | StepStatus | TaskStatus
 
 export function ActivityIcon({ kind, animated = false }: { kind: IconKind; animated?: boolean }) {
   return (
@@ -11,6 +11,7 @@ export function ActivityIcon({ kind, animated = false }: { kind: IconKind; anima
       {kind === 'approval' && <><path d="m12 3 8 3v5c0 5-4 8-8 10-4-2-8-5-8-10V6l8-3Z" /><path d="M12 8v5m0 3h.01" /></>}
       {(kind === 'success' || kind === 'done') && <><circle cx="12" cy="12" r="8" /><path className="check-path" d="m8 12 3 3 5-6" /></>}
       {kind === 'error' && <><circle cx="12" cy="12" r="8" /><path d="m9 9 6 6m0-6-6 6" /></>}
+      {kind === 'stopped' && <><circle cx="12" cy="12" r="8" /><rect x="9" y="9" width="6" height="6" rx="1" /></>}
       {kind === 'command' && <><rect x="3" y="5" width="18" height="14" rx="3" /><path d="m7 9 3 3-3 3" /><path className="terminal-cursor" d="M13 15h4" /></>}
       {kind === 'read' && <><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Zm0 0v6h6M8 13h8m-8 4h5" /></>}
       {kind === 'edit' && <><path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6" /><path d="m10 14 1-4 7-7 3 3-7 7-4 1Zm6-9 3 3" /></>}

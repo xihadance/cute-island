@@ -130,7 +130,10 @@ async function smoke() {
       const result = await send('Page.captureScreenshot', { format: 'png' })
       await fs.writeFile(`output/playwright/${name}.png`, Buffer.from(result.data, 'base64'))
     }
-    await push({ id: 'drag', agent: 'Codex', state: 'running', title: '拖动与透明度验证', operation: { kind: 'command', command: 'npm run typecheck', shell: 'cmd' } })
+    await push({ id: 'drag', agent: 'Codex', state: 'running', title: '拖动与透明度验证', operation: { kind: 'command', command: 'npm run typecheck', shell: 'cmd' },
+      tasks: [{ id: 'child', kind: 'agent', label: '检查代码', status: 'active', detail: '读取组件' },
+        { id: 'command', kind: 'command', label: '类型检查', status: 'done' }] })
+    assert.equal(await evaluate('document.querySelector(".task-badge").textContent.trim()'), '1')
     await until(async () => (await opacity()) < 0.7)
     await screenshot('drag-translucent')
     const original = pointOf((await getWindow()).bounds)
@@ -144,11 +147,15 @@ async function smoke() {
     await until(async () => (await opacity()) < 0.7)
     await click('.island')
     assert.equal(await mode(), 'expanded', 'A light click expands the capsule')
+    assert.equal(await evaluate('document.querySelectorAll(".tasks li").length'), 2)
+    assert.equal(await evaluate('document.querySelectorAll(".tasks li[data-status=active]").length'), 1)
     assert.deepEqual(pointOf((await getWindow()).bounds), original, 'A click does not move the window')
     await setCursor({ x: -10000, y: -10000 })
     await mouse('mouseMoved', { x: 0, y: 550 })
     assert.equal(await opacity(), 1, 'Expanded content stays solid after leaving')
     await screenshot('drag-solid')
+    await push({ id: 'drag', tasks: null })
+    assert.equal(await evaluate('document.querySelectorAll(".tasks, .task-badge").length'), 0)
     const beforeSelection = pointOf((await getWindow()).bounds)
     await drag('.command-code', { x: 70, y: 60 })
     assert.deepEqual(pointOf((await getWindow()).bounds), beforeSelection, 'Command selection does not move the window')
@@ -190,7 +197,7 @@ async function smoke() {
     const reset = (await getWindow()).bounds
     assert.equal(reset.x, Math.round(area.x + (area.width - reset.width) / 2))
     assert.equal(reset.y, area.y + 4)
-    console.log(JSON.stringify({ result: 'passed', nativeDrag: true, clickVsDrag: true, commandSelection: true, transparency: true, edgeExpansion: true, restartPersistence: true, trayReset: true, rendererErrors: errors }))
+    console.log(JSON.stringify({ result: 'passed', taskDisplay: true, nativeDrag: true, clickVsDrag: true, commandSelection: true, transparency: true, edgeExpansion: true, restartPersistence: true, trayReset: true, rendererErrors: errors }))
   } catch (error) {
     console.error(logs.slice(-2000)); throw error
   } finally {

@@ -98,7 +98,9 @@ body[data-surface='web'] {
 .compact {
   width: 100%;
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-auto-columns: auto;
+  grid-auto-flow: column;
   align-items: center;
   gap: 8px;
   padding: 0 14px 0 8px;
@@ -137,7 +139,9 @@ body[data-surface='web'] {
   color: inherit;
   font: inherit;
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-auto-columns: auto;
+  grid-auto-flow: column;
   align-items: center;
   gap: 8px;
   padding: 0 10px 0 6px;
@@ -389,6 +393,21 @@ body[data-surface='web'] {
 .steps li[data-status='active'] > svg { color: var(--state-running); }
 .steps li[data-status='waiting'] > svg { color: var(--state-approval); }
 .steps li[data-status='error'] > svg { color: var(--state-error); }
+
+.tasks { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.tasks-heading { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: #a1aebc; }
+.tasks ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.tasks li { display: flex; align-items: center; gap: 8px; min-width: 0; height: 20px; font-size: 12.5px; color: rgba(255, 255, 255, 0.82); }
+.tasks li .activity-icon { width: 16px; height: 16px; }
+.task-label { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: #8f9cab; }
+.tasks li[data-status='active'] > svg { color: var(--state-running); }
+.tasks li[data-status='done'] > svg { color: var(--state-success); }
+.tasks li[data-status='error'] > svg { color: var(--state-error); }
+.tasks li[data-status='stopped'] > svg { color: #8f9cab; }
+.tasks li[data-status='stopped'] .task-label { color: #a1aebc; }
+.task-badge { display: inline-flex; flex: none; align-items: center; gap: 2px; padding: 0 5px 0 3px; height: 18px; border-radius: 9px; background: rgba(120, 185, 255, 0.14); color: var(--state-running); font-size: 11px; font-variant-numeric: tabular-nums; }
+.task-badge .activity-icon { width: 13px; height: 13px; }
 
 .activity-icon { display: block; width: 18px; height: 18px; flex: none; }
 .activity-status { display: inline-flex; gap: 5px; align-items: center; font-size: 11px; line-height: 20px; white-space: nowrap; }

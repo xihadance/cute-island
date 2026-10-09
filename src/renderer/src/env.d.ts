@@ -30,6 +30,7 @@ export interface IslandApi {
   simulateAgents?: () => void
   simulateSessions?: () => void
   simulateCapabilities?: () => void
+  simulateTasks?: () => void
   simulateApproval?: () => void
   clear?: () => void
 }

@@ -25,6 +25,23 @@ export interface ActivityStep {
   kind?: OperationKind
 }
 
+/** Work that outlives a single tool call: sub-agents and background commands. */
+export type TaskKind = 'agent' | 'command'
+export type TaskStatus = 'active' | 'done' | 'error' | 'stopped'
+export const TASK_STATUSES: readonly TaskStatus[] = ['active', 'done', 'error', 'stopped']
+
+export interface ActivityTask {
+  id: string
+  kind: TaskKind
+  label: string
+  status: TaskStatus
+  detail?: string
+}
+
+export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
+  active: '进行中', done: '已完成', error: '失败', stopped: '已停止'
+}
+
 export interface Activity {
   id: string
   agent: string
@@ -34,6 +51,7 @@ export interface Activity {
   operation?: ActivityOperation
   progress?: number
   steps: ActivityStep[]
+  tasks?: ActivityTask[]
   startedAt: number
   updatedAt: number
   endedAt?: number
@@ -48,6 +66,7 @@ export interface ActivityInput {
   operation?: ActivityOperation | null
   progress?: number | null
   steps?: ActivityStep[]
+  tasks?: ActivityTask[] | null
 }
 
 export interface EndInput {
@@ -135,8 +154,16 @@ export function expandedHeight(activity: Activity, otherCount: number): number {
   if (activity.state === 'approval') height += 70
   if (typeof activity.progress === 'number') height += 22
   height += Math.min(activity.steps.length, 4) * 22
+  height += tasksHeight(activity.tasks)
   if (otherCount > 0) height += 22 + Math.min(otherCount, 3) * 22
   return Math.min(Math.max(height, 150), 480)
+}
+
+export const MAX_VISIBLE_TASKS = 4
+
+export function tasksHeight(tasks: readonly ActivityTask[] | undefined): number {
+  if (!tasks?.length) return 0
+  return 26 + Math.min(tasks.length, MAX_VISIBLE_TASKS) * 24
 }
 
 export function operationHeight(operation: ActivityOperation): number {
@@ -155,6 +182,7 @@ interface ParsedActivity {
   clearProgress: boolean
   progress?: number
   steps?: ActivityStep[]
+  tasks?: ActivityTask[] | null
 }
 
 export class ActivityStore {
@@ -200,6 +228,7 @@ export class ActivityStore {
       operation: parsed.operation === null ? undefined : parsed.operation ?? (restarting ? undefined : current?.operation),
       progress: resolveProgress(parsed, restarting ? undefined : current),
       steps: parsed.steps ?? (restarting ? [] : current?.steps.map((step) => ({ ...step }))) ?? [],
+      ...resolveTasks(parsed, current),
       startedAt: restarting ? now : current?.startedAt ?? now,
       updatedAt: now
     }
@@ -301,6 +330,12 @@ function resolveProgress(parsed: ParsedActivity, current: Activity | undefined):
   return current?.progress
 }
 
+function resolveTasks(parsed: ParsedActivity, current: Activity | undefined): { tasks?: ActivityTask[] } {
+  // Background work survives a new turn, so tasks are only replaced explicitly.
+  const tasks = parsed.tasks === null ? undefined : parsed.tasks ?? current?.tasks
+  return tasks?.length ? { tasks: tasks.map((task) => ({ ...task })) } : {}
+}
+
 function settleStep(step: ActivityStep, result: 'success' | 'error'): ActivityStep {
   if (step.status !== 'active' && step.status !== 'waiting') return { ...step }
   return { ...step, status: result === 'success' ? 'done' : 'error' }
@@ -310,7 +345,8 @@ function cloneActivity(activity: Activity): Activity {
   return {
     ...activity,
     ...(activity.operation ? { operation: { ...activity.operation } } : {}),
-    steps: activity.steps.map((step) => ({ ...step }))
+    steps: activity.steps.map((step) => ({ ...step })),
+    ...(activity.tasks ? { tasks: activity.tasks.map((task) => ({ ...task })) } : {})
   }
 }
 
@@ -362,6 +398,7 @@ export function parseActivityInput(input: unknown): ParsedActivity {
   }
   if ('operation' in body) parsed.operation = body.operation === null ? null : parseOperation(body.operation)
   if ('steps' in body && body.steps !== undefined) parsed.steps = parseSteps(body.steps)
+  if ('tasks' in body && body.tasks !== undefined) parsed.tasks = body.tasks === null ? null : parseTasks(body.tasks)
   return parsed
 }
 
@@ -399,6 +436,28 @@ function parseSteps(value: unknown): ActivityStep[] {
     seen.add(id)
     if (step.kind !== undefined && !isOperationKind(step.kind)) throw new ActivityError(400, `steps[${index}].kind 无效`)
     return { id, label: clip(step.label, 80), status: step.status, ...(step.kind ? { kind: step.kind as OperationKind } : {}) }
+  })
+}
+
+function parseTasks(value: unknown): ActivityTask[] {
+  if (!Array.isArray(value)) throw new ActivityError(400, 'tasks 必须是数组')
+  if (value.length > 12) throw new ActivityError(400, 'tasks 最多 12 条')
+  const seen = new Set<string>()
+  return value.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new ActivityError(400, `tasks[${index}] 无效`)
+    const task = item as Record<string, unknown>
+    const id = typeof task.id === 'string' ? task.id.trim() : ''
+    if (!ID_PATTERN.test(id)) throw new ActivityError(400, `tasks[${index}].id 无效`)
+    if (seen.has(id)) throw new ActivityError(400, `tasks[${index}].id 重复`)
+    seen.add(id)
+    if (task.kind !== 'agent' && task.kind !== 'command') throw new ActivityError(400, `tasks[${index}].kind 无效`)
+    if (typeof task.label !== 'string' || !task.label.trim()) throw new ActivityError(400, `tasks[${index}].label 无效`)
+    if (typeof task.status !== 'string' || !(TASK_STATUSES as readonly string[]).includes(task.status)) {
+      throw new ActivityError(400, `tasks[${index}].status 无效`)
+    }
+    if (task.detail !== undefined && typeof task.detail !== 'string') throw new ActivityError(400, `tasks[${index}].detail 无效`)
+    const detail = typeof task.detail === 'string' ? clip(task.detail, 160) : ''
+    return { id, kind: task.kind, label: clip(task.label, 80), status: task.status as TaskStatus, ...(detail ? { detail } : {}) }
   })
 }
 

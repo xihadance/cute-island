@@ -1,35 +1,36 @@
-import { execFile } from 'node:child_process'
-import { open, readdir, readFile, stat } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import path from 'node:path'
-import { promisify } from 'node:util'
 import type { ActivityStore } from '../shared/activity'
-import { parseTranscript, type AgentKind, type SessionView } from './parse'
+import { collect, mapLimited, readSession, SessionReader, type SessionFile } from './files'
+import { activityId } from './parse'
+import { BUILTIN_PLUGINS } from './plugins'
+import { listAgentProcesses } from './processes'
+import { dropActiveTasks, mergeChildTasks, presentTasks, type ChildSession } from './reduce'
+import type { AgentPlugin, ChildLink, SessionView } from './types'
+
+export { readSession } from './files'
+export { listAgentProcesses, matchAgentProcesses } from './processes'
 
 const FRESH_MS = 8_000
 const LOOKBACK_MS = 120_000
 const RECOVERY_MS = 24 * 60 * 60_000
-const TAIL_BYTES = 256 * 1024
-const MAX_TAIL_BYTES = 4 * 1024 * 1024
-const MAX_JSON_BYTES = 16 * 1024 * 1024
+/** Background work with no sign of life for this long is assumed gone. */
+const BACKGROUND_MS = 30 * 60_000
 const FILES_PER_AGENT = 64
-const execFileAsync = promisify(execFile)
 
-export interface AgentRoots {
-  claude: string
-  codex: string
-  gemini: string
-  cursor: string
-}
+/** Transcript root per plugin kind. Kinds without a root are not watched. */
+export type AgentRoots = Record<string, string>
 
 export interface WatchOptions {
   roots?: AgentRoots
+  plugins?: readonly AgentPlugin[]
   now?: () => number
-  listProcesses?: () => Set<AgentKind> | Promise<Set<AgentKind>>
+  listProcesses?: () => Set<string> | Promise<Set<string>>
   intervalMs?: number
   freshMs?: number
   discoveryMs?: number
   processMs?: number
+  backgroundMs?: number
   /** Override for diagnostics and deterministic I/O tests. */
   readSession?: typeof readSession
 }
@@ -42,38 +43,38 @@ interface TrackedSession {
 interface CachedSession {
   stamp: string
   view: SessionView | null
+  /** When the stamp last changed. Windows may not bump mtime while a writer holds the file. */
+  changedAt: number
 }
 
-interface SessionFile {
-  kind: AgentKind
-  path: string
-  sessionId: string
-  mtimeMs: number
+interface LoadedFile {
+  file: SessionFile
+  view: SessionView
+  age: number
 }
 
-export function defaultAgentRoots(home = homedir(), env: NodeJS.ProcessEnv = process.env): AgentRoots {
-  return {
-    claude: path.join(env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'projects'),
-    codex: path.join(env.CODEX_HOME || path.join(home, '.codex'), 'sessions'),
-    gemini: path.join(env.GEMINI_CLI_HOME || path.join(home, '.gemini'), 'tmp'),
-    cursor: path.join(env.CURSOR_HOME || path.join(home, '.cursor'), 'projects')
-  }
+export function defaultAgentRoots(home = homedir(), env: NodeJS.ProcessEnv = process.env, plugins: readonly AgentPlugin[] = BUILTIN_PLUGINS): AgentRoots {
+  return Object.fromEntries(plugins.map((plugin) => [plugin.kind, plugin.defaultRoot(home, env)]))
 }
 
 export class SessionWatcher {
-  private readonly roots: AgentRoots
+  private readonly sources: Array<{ plugin: AgentPlugin; root: string }>
   private readonly now: () => number
   private readonly listProcesses: NonNullable<WatchOptions['listProcesses']>
   private readonly intervalMs: number
   private readonly freshMs: number
   private readonly discoveryMs: number
   private readonly processMs: number
+  private readonly backgroundMs: number
   private readonly readSession: typeof readSession
   private readonly tracked = new Map<string, TrackedSession>()
   private readonly cache = new Map<string, CachedSession>()
+  /** Resolved parent links; `null` marks a top-level transcript. */
+  private readonly links = new Map<string, { stamp: string; link: ChildLink | null }>()
+  private readonly reader = new SessionReader()
   private files: SessionFile[] = []
-  private running = new Set<AgentKind>()
-  private activeClaudeIds = new Set<string>()
+  private running = new Set<string>()
+  private liveIds = new Map<string, Set<string>>()
   private lastDiscovery = -Infinity
   private lastProcesses = -Infinity
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -82,14 +83,17 @@ export class SessionWatcher {
   private generation = 0
 
   constructor(private readonly store: ActivityStore, options: WatchOptions = {}) {
-    this.roots = options.roots ?? defaultAgentRoots()
+    const plugins = options.plugins ?? BUILTIN_PLUGINS
+    const roots = options.roots ?? defaultAgentRoots(homedir(), process.env, plugins)
+    this.sources = plugins.filter((plugin) => roots[plugin.kind]).map((plugin) => ({ plugin, root: roots[plugin.kind] }))
     this.now = options.now ?? Date.now
-    this.listProcesses = options.listProcesses ?? listAgentProcesses
+    this.listProcesses = options.listProcesses ?? (() => listAgentProcesses(plugins))
     this.intervalMs = options.intervalMs ?? 800
     this.freshMs = options.freshMs ?? FRESH_MS
     this.discoveryMs = options.discoveryMs ?? 10_000
     this.processMs = options.processMs ?? 5_000
-    this.readSession = options.readSession ?? readSession
+    this.backgroundMs = options.backgroundMs ?? BACKGROUND_MS
+    this.readSession = options.readSession ?? this.reader.read.bind(this.reader)
   }
 
   start(): void {
@@ -114,6 +118,7 @@ export class SessionWatcher {
     this.generation += 1
     clearTimeout(this.timer)
     this.timer = undefined
+    this.reader.clear()
   }
 
   /** Concurrent requests share a scan; slow disks never create overlapping work. */
@@ -131,14 +136,17 @@ export class SessionWatcher {
       } catch {
         // A transient process-query failure is not evidence that an agent exited.
       }
-      this.activeClaudeIds = await activeClaudeSessions(path.join(this.roots.claude, '..', 'sessions'))
+      this.liveIds = new Map(await Promise.all(this.sources.map(async ({ plugin, root }) =>
+        [plugin.kind, plugin.liveSessions ? await plugin.liveSessions(root) : new Set<string>()] as const)))
     }
     if (generation !== this.generation) return
     if (now - this.lastDiscovery >= this.discoveryMs) {
       this.files = await this.sessionFiles(now)
+      this.reader.retain(new Set(this.files.map((file) => file.path)))
       this.lastDiscovery = now
     }
     const seen = new Set<string>()
+    const loaded: LoadedFile[] = []
     await mapLimited(this.files, 8, async (file) => {
       try {
         const info = await stat(file.path)
@@ -146,25 +154,20 @@ export class SessionWatcher {
         const previous = this.cache.get(file.path)
         const view = previous?.stamp === stamp
           ? previous.view
-          : await this.readSession(file.kind, file.sessionId, file.path, info.size)
+          : await this.readSession(file.plugin.kind, file.sessionId, file.path, info.size, file.plugin)
         if (generation !== this.generation) return
         // Incomplete appends and atomic JSON rewrites must not clear a live session.
         const parsed = view ?? previous?.view ?? null
-        this.cache.set(file.path, { stamp, view: parsed })
+        const changedAt = !previous ? info.mtimeMs : previous.stamp === stamp ? previous.changedAt : now
+        this.cache.set(file.path, { stamp, view: parsed, changedAt })
         seen.add(file.path)
-        if (!parsed) return
-        const age = Math.max(0, now - info.mtimeMs)
-        const known = this.tracked.has(file.path)
-        const live = age <= this.freshMs || this.running.has(file.kind) || this.hasLiveRegistration(file)
-        const presented = presentSession(parsed, live, age, known)
-        if (!presented) return
-        if (presented.terminal && age > this.freshMs && !known) return
-        this.publish(file.path, presented)
+        if (parsed) loaded.push({ file, view: parsed, age: Math.max(0, now - Math.max(info.mtimeMs, changedAt)) })
       } catch {
         // Logs may be rotated, locked or deleted while an agent writes them.
       }
     })
     if (generation !== this.generation) return
+    this.present(loaded)
     for (const file of this.cache.keys()) if (!seen.has(file)) this.cache.delete(file)
     const candidates = new Set(this.files.map((file) => file.path))
     for (const [file, tracked] of this.tracked) {
@@ -178,14 +181,65 @@ export class SessionWatcher {
     }
   }
 
+  /** Fold sub-agent transcripts into their parents, then publish top-level sessions. */
+  private present(loaded: readonly LoadedFile[]): void {
+    const children = new Map<string, LoadedFile[]>()
+    for (const item of loaded) {
+      const { file } = item
+      if (!file.link) continue
+      const parent = activityId(file.plugin.kind, file.link.parentSessionId)
+      const list = children.get(parent) ?? []
+      list.push(item)
+      children.set(parent, list)
+    }
+    const folded = new Map<string, { view: SessionView; age: number; live: boolean }>()
+    const visiting = new Set<string>()
+    const fold = ({ file, view, age }: LoadedFile): { view: SessionView; age: number; live: boolean } => {
+      const cached = folded.get(view.id)
+      if (cached) return cached
+      // Corrupt/cyclic parent links must not stall every other session.
+      if (visiting.has(view.id)) return { view: presentTasks(view), age, live: this.isLive(file, age) }
+      visiting.add(view.id)
+      const linked: Array<ChildSession & { age: number }> = (children.get(view.id) ?? []).map((child) => ({
+        ...fold(child), link: child.file.link!
+      }))
+      const busy = linked.filter((child) => child.live && !child.view.terminal)
+      // Propagate a descendant's activity and native busy registration all the way to the root.
+      const effectiveAge = Math.min(age, ...busy.map((child) => child.age))
+      let merged = mergeChildTasks(view, linked)
+      const registered = this.hasLiveRegistration(file)
+      if (effectiveAge > this.backgroundMs && !registered) merged = dropActiveTasks(merged, new Set(busy.map((child) => child.link.taskId)))
+      const live = this.isLive(file, effectiveAge) || busy.length > 0
+      const result = { view: presentTasks(merged), age: effectiveAge, live }
+      folded.set(view.id, result)
+      visiting.delete(view.id)
+      return result
+    }
+    for (const item of loaded) {
+      const { file } = item
+      if (file.link) continue
+      const result = fold(item)
+      const known = this.tracked.has(file.path)
+      const presented = presentSession(result.view, result.live || this.running.has(file.plugin.kind), result.age, known)
+      if (!presented) continue
+      if (presented.terminal && result.age > this.freshMs && !known) continue
+      this.publish(file.path, presented)
+    }
+  }
+
+  private isLive(file: SessionFile, age: number): boolean {
+    return age <= this.freshMs || (age <= this.backgroundMs && this.running.has(file.plugin.kind)) || this.hasLiveRegistration(file)
+  }
+
   private publish(file: string, view: SessionView): void {
-    const signature = JSON.stringify([view.state, view.title, view.detail ?? '', view.operation, view.steps])
+    const signature = JSON.stringify([view.state, view.title, view.detail ?? '', view.operation, view.steps, view.tasks])
     const previous = this.tracked.get(file)
     this.tracked.set(file, { signature, id: view.id })
     if (previous?.signature === signature) return
     this.store.upsert({
       id: view.id, agent: view.agent, state: view.state, title: view.title,
-      detail: view.detail ?? null, operation: view.operation ?? null, steps: view.steps
+      detail: view.detail ?? null, operation: view.operation ?? null, steps: view.steps,
+      tasks: view.tasks.length ? view.tasks : null
     })
   }
 
@@ -194,160 +248,84 @@ export class SessionWatcher {
     for (const [file, tracked] of this.tracked) {
       if (this.store.get(tracked.id)) retained.add(file)
     }
-    const groups = await Promise.all((Object.keys(this.roots) as AgentKind[]).map(async (kind) => {
-      const files = await collect(this.roots[kind], kind)
-      return files
-        .filter((file) => retained.has(file.path) || this.hasLiveRegistration(file) || now - file.mtimeMs <= (this.running.has(kind) ? RECOVERY_MS : LOOKBACK_MS))
+    const present = new Set<string>()
+    const pinned = (file: SessionFile): boolean => retained.has(file.path) || this.hasLiveRegistration(file)
+    const groups = await Promise.all(this.sources.map(async ({ plugin, root }) => {
+      const window = this.running.has(plugin.kind) ? RECOVERY_MS : LOOKBACK_MS
+      const all = await collect(root, plugin)
+      const bySession = new Map(all.map((file) => [file.sessionId, file]))
+      const found = all
+        .filter((file) => pinned(file) || now - file.mtimeMs <= window)
         .sort((a, b) => b.mtimeMs - a.mtimeMs)
-        .filter((file, index) => index < FILES_PER_AGENT || retained.has(file.path) || this.hasLiveRegistration(file))
+      // Only the newest files need their parent resolved; the rest are cut below anyway.
+      let shortlist = found.filter((file, index) => index < FILES_PER_AGENT * 2 || pinned(file))
+      const resolved: SessionFile[] = []
+      const attempted = new Set<string>()
+      // Include ancestors even if only a descendant has written recently.
+      while (shortlist.length) {
+        const next = new Map<string, SessionFile>()
+        for (const file of shortlist) attempted.add(file.path)
+        await mapLimited(shortlist, 8, async (file) => {
+          present.add(file.path)
+          const link = await this.linkFor(plugin, file)
+          if (link === undefined) return
+          resolved.push(link ? { ...file, link } : file)
+          const parent = link ? bySession.get(link.parentSessionId) : undefined
+          if (parent && !attempted.has(parent.path)) next.set(parent.path, parent)
+        })
+        shortlist = [...next.values()]
+      }
+      resolved.sort((a, b) => b.mtimeMs - a.mtimeMs)
+      const top = resolved.filter((file) => !file.link).filter((file, index) => index < FILES_PER_AGENT || pinned(file))
+      const parents = new Set(top.map((file) => file.sessionId))
+      const kids: SessionFile[] = []
+      let added = true
+      while (added && kids.length < FILES_PER_AGENT) {
+        added = false
+        for (const file of resolved) {
+          if (!file.link || parents.has(file.sessionId) || !parents.has(file.link.parentSessionId)) continue
+          kids.push(file)
+          parents.add(file.sessionId)
+          added = true
+          if (kids.length >= FILES_PER_AGENT) break
+        }
+      }
+      return [...top, ...kids]
     }))
+    for (const file of this.links.keys()) if (!present.has(file)) this.links.delete(file)
     return groups.flat()
   }
 
+  /** `undefined` means the link could not be resolved yet; skip the file this round. */
+  private async linkFor(plugin: AgentPlugin, file: SessionFile): Promise<ChildLink | null | undefined> {
+    if (!plugin.child) return null
+    const cached = this.links.get(file.path)
+    if (cached?.stamp === file.stamp) return cached.link
+    try {
+      const link = await plugin.child(file.path)
+      if (link !== undefined) this.links.set(file.path, { stamp: file.stamp, link })
+      return link
+    } catch {
+      return undefined
+    }
+  }
+
   private hasLiveRegistration(file: SessionFile): boolean {
-    if (file.kind !== 'claude') return false
-    return this.activeClaudeIds.has(file.sessionId) || this.activeClaudeIds.has(file.sessionId.slice(0, 8))
+    const ids = this.liveIds.get(file.plugin.kind)
+    if (!ids?.size) return false
+    return ids.has(file.sessionId) || ids.has(file.sessionId.slice(0, 8))
   }
-}
-
-/** Newer Claude versions register busy sessions by PID, including parked jobs. */
-async function activeClaudeSessions(root: string): Promise<Set<string>> {
-  const active = new Set<string>()
-  try {
-    const files = (await readdir(root)).filter((name) => /^\d+\.json$/.test(name))
-    await mapLimited(files, 4, async (name) => {
-      try {
-        const file = path.join(root, name)
-        if ((await stat(file)).size > 64 * 1024) return
-        const row = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
-        if (!row || row.pid !== Number(path.basename(name, '.json'))) return
-        if (row.status !== 'busy' && row.status !== 'waiting') return
-        const pid = Number(row.pid)
-        if (!Number.isSafeInteger(pid) || pid <= 0) return
-        process.kill(pid, 0)
-        for (const id of [row.sessionId, row.parkedJobId]) {
-          if (typeof id === 'string' && /^[A-Za-z0-9-]{8,}$/.test(id)) active.add(id)
-        }
-      } catch { /* Stale registrations and partial writes are expected. */ }
-    })
-  } catch { /* Older Claude versions do not have a session registry. */ }
-  return active
-}
-
-async function collect(root: string, kind: AgentKind): Promise<SessionFile[]> {
-  const found: SessionFile[] = []
-  const dirs: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }]
-  while (dirs.length) {
-    const batch = dirs.splice(0, 8)
-    await Promise.all(batch.map(async ({ dir, depth }) => {
-      try {
-        const entries = await readdir(dir, { withFileTypes: true })
-        const files: string[] = []
-        for (const entry of entries) {
-          if (['node_modules', '.git', 'subagents'].includes(entry.name)) continue
-          const full = path.join(dir, entry.name)
-          if (entry.isDirectory() && depth < 6) dirs.push({ dir: full, depth: depth + 1 })
-          else if (entry.isFile() && accepts(kind, full)) files.push(full)
-        }
-        await mapLimited(files, 4, async (file) => {
-          try {
-            const info = await stat(file)
-            found.push({ kind, path: file, sessionId: sessionIdFrom(kind, file), mtimeMs: info.mtimeMs })
-          } catch { /* File disappeared during discovery. */ }
-        })
-      } catch { /* An agent may not be installed, or a directory may be inaccessible. */ }
-    }))
-  }
-  return found
-}
-
-function accepts(kind: AgentKind, file: string): boolean {
-  const base = path.basename(file)
-  if (kind === 'codex') return base.startsWith('rollout-') && base.endsWith('.jsonl')
-  if (kind === 'gemini') return base.startsWith('session-') && /\.jsonl?$/.test(base)
-  if (kind === 'cursor') return file.includes(`${path.sep}agent-transcripts${path.sep}`) && base.endsWith('.jsonl')
-  return base.endsWith('.jsonl')
-}
-
-function sessionIdFrom(kind: AgentKind, file: string): string {
-  const base = path.basename(file).replace(/\.jsonl?$/, '')
-  if (kind === 'codex') return base.match(/([0-9a-f]{8}-[0-9a-f-]{27,})$/i)?.[1] ?? base
-  if (kind === 'gemini') return base.replace(/^session-/, '')
-  return base
 }
 
 function presentSession(view: SessionView, live: boolean, age: number, known: boolean): SessionView | null {
   if (view.terminal || live) return view
   if (!known) return null
   if (age <= 60_000) return view
-  return { ...view, state: 'error', title: '会话已中断', terminal: true }
-}
-
-export async function readSession(kind: AgentKind, sessionId: string, file: string, size: number): Promise<SessionView | null> {
-  if (file.endsWith('.json') && size > MAX_JSON_BYTES) return null
-  const fd = await open(file, 'r')
-  try {
-    let length = file.endsWith('.json') ? size : Math.min(size, TAIL_BYTES)
-    while (length > 0) {
-      const start = size - length
-      const buffer = Buffer.alloc(length)
-      let read = 0
-      while (read < length) {
-        const { bytesRead } = await fd.read(buffer, read, length - read, start + read)
-        if (!bytesRead) break
-        read += bytesRead
-      }
-      let text = buffer.subarray(0, read).toString('utf8')
-      if (start > 0) {
-        const newline = text.indexOf('\n')
-        text = newline < 0 ? '' : text.slice(newline + 1)
-      }
-      const view = parseTranscript(kind, sessionId, text)
-      if (view || length >= Math.min(size, MAX_TAIL_BYTES)) return view
-      length = Math.min(size, length * 2, MAX_TAIL_BYTES)
-    }
-    return null
-  } finally {
-    await fd.close()
+  return {
+    ...view,
+    state: 'error',
+    title: '会话已中断',
+    terminal: true,
+    tasks: view.tasks.map((task) => (task.status === 'active' ? { ...task, status: 'stopped' as const } : task))
   }
-}
-
-async function mapLimited<T>(items: T[], limit: number, visit: (item: T) => Promise<void>): Promise<void> {
-  let index = 0
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (index < items.length) await visit(items[index++])
-  }))
-}
-
-export async function listAgentProcesses(): Promise<Set<AgentKind>> {
-  try {
-    // Command lines also identify npm-installed agents running as node.exe.
-    const { stdout } = process.platform === 'win32'
-      ? await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-        'Get-CimInstance Win32_Process | Where-Object { $_.Name -match "^(claude|codex|gemini|cursor-agent|agent|node)(\\.exe)?$" } | ForEach-Object { if ($_.CommandLine) { $_.CommandLine } else { $_.Name } }'],
-        { encoding: 'utf8', timeout: 5000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 })
-      : await execFileAsync('ps', ['-ax', '-o', 'args='], { encoding: 'utf8', timeout: 3000, maxBuffer: 2 * 1024 * 1024 })
-    return matchAgentProcesses(stdout)
-  } catch {
-    return new Set()
-  }
-}
-
-export function matchAgentProcesses(output: string): Set<AgentKind> {
-  const found = new Set<AgentKind>()
-  const executables: Record<string, AgentKind> = { claude: 'claude', codex: 'codex', gemini: 'gemini', 'cursor-agent': 'cursor', agent: 'cursor' }
-  for (const line of output.split(/\r?\n/)) {
-    const tokens = line.trim().match(/"[^"]*"|'[^']*'|[^\s,]+/g) ?? []
-    const command = (tokens[0] ?? '').replace(/^["']|["']$/g, '')
-    const executable = command.split(/[\\/]/).pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
-    if (executables[executable]) found.add(executables[executable])
-    if (executable !== 'node' && executable !== 'nodejs' && executable !== 'bun') continue
-    // Inspect only the script argument, never task text that happens to mention an agent.
-    const script = tokens.slice(1).find((token) => !token.startsWith('-'))?.replace(/^["']|["']$/g, '').replace(/\\/g, '/') ?? ''
-    if (/\/@anthropic-ai\/claude-code\//i.test(script)) found.add('claude')
-    if (/\/@openai\/codex\//i.test(script)) found.add('codex')
-    if (/\/@google\/gemini-cli\//i.test(script)) found.add('gemini')
-    if (/\/cursor-agent\//i.test(script)) found.add('cursor')
-  }
-  return found
 }

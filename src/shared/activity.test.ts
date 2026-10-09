@@ -171,6 +171,20 @@ describe('ActivityStore', () => {
   it('uses the documented dwell', () => {
     expect(SUCCESS_DWELL_MS).toBe(2800)
   })
+
+  it('keeps background tasks across turns until replaced or cleared, and validates them', () => {
+    const store = new ActivityStore(() => ({ cancel() {} }))
+    const task = { id: 'cell-3', kind: 'command', label: 'npm test', status: 'active' }
+    store.upsert({ id: 'bg', state: 'running', tasks: [task] })
+    store.end('bg', { result: 'success' })
+    expect(store.upsert({ id: 'bg', state: 'thinking' }).tasks).toEqual([task])
+    store.get('bg')!.tasks![0].label = 'changed'
+    expect(store.get('bg')?.tasks?.[0].label).toBe('npm test')
+    expect(store.upsert({ id: 'bg', tasks: null }).tasks).toBeUndefined()
+    expect(() => store.upsert({ id: 'bg', tasks: [{ ...task, status: 'paused' }] })).toThrow(/tasks\[0\]\.status/)
+    expect(() => store.upsert({ id: 'bg', tasks: [task, task] })).toThrow(/重复/)
+    expect(() => store.upsert({ id: 'bg', tasks: [{ ...task, kind: 'shell' }] })).toThrow(/kind/)
+  })
 })
 
 describe('pickPrimary', () => {
