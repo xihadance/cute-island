@@ -320,13 +320,17 @@ async function mapLimited<T>(items: T[], limit: number, visit: (item: T) => Prom
 }
 
 export async function listAgentProcesses(): Promise<Set<AgentKind>> {
-  // Command lines also identify npm-installed agents running as node.exe.
-  const { stdout } = process.platform === 'win32'
-    ? await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      'Get-CimInstance Win32_Process | Where-Object { $_.Name -match "^(claude|codex|gemini|cursor-agent|agent|node)(\\.exe)?$" } | ForEach-Object { if ($_.CommandLine) { $_.CommandLine } else { $_.Name } }'],
-      { encoding: 'utf8', timeout: 5000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 })
-    : await execFileAsync('ps', ['-ax', '-o', 'args='], { encoding: 'utf8', timeout: 3000, maxBuffer: 2 * 1024 * 1024 })
-  return matchAgentProcesses(stdout)
+  try {
+    // Command lines also identify npm-installed agents running as node.exe.
+    const { stdout } = process.platform === 'win32'
+      ? await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        'Get-CimInstance Win32_Process | Where-Object { $_.Name -match "^(claude|codex|gemini|cursor-agent|agent|node)(\\.exe)?$" } | ForEach-Object { if ($_.CommandLine) { $_.CommandLine } else { $_.Name } }'],
+        { encoding: 'utf8', timeout: 5000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 })
+      : await execFileAsync('ps', ['-ax', '-o', 'args='], { encoding: 'utf8', timeout: 3000, maxBuffer: 2 * 1024 * 1024 })
+    return matchAgentProcesses(stdout)
+  } catch {
+    return new Set()
+  }
 }
 
 export function matchAgentProcesses(output: string): Set<AgentKind> {

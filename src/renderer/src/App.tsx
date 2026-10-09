@@ -113,7 +113,10 @@ export function App() {
     observer.observe(element)
     window.addEventListener('resize', syncBounds)
     syncBounds()
-    return () => { observer.disconnect(); window.removeEventListener('resize', syncBounds) }
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', syncBounds)
+    }
   }, [bridge, expanded])
 
   const toggle = (): void => {
