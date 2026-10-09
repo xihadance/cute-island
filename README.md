@@ -72,3 +72,10 @@ npx electron-builder
 ```
 
 配置已经写好 Windows NSIS、macOS dmg、Linux AppImage 和 deb。图标在 `build/icon.png`。
+
+推送版本标签后，GitHub Actions 会在三端打包，并发布到这个仓库的 Release：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
