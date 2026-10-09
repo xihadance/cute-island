@@ -1,0 +1,200 @@
+import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, screen } from 'electron'
+import path from 'node:path'
+import { ActivityStore } from '../shared/activity'
+import { DEMO_ID, demoFrames, playDemoFrames } from '../shared/demo'
+import { startStatusServer, type StatusServer } from './server'
+import { TRAY_ICON } from './tray-icon'
+
+const WINDOW_WIDTH = 460
+const WINDOW_HEIGHT = 400
+
+let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+let server: StatusServer | null = null
+let store: ActivityStore | null = null
+let demoToken = 0
+
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('enable-transparent-visuals')
+}
+if (process.env.CUTE_ISLAND_DISABLE_GPU === '1') {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
+}
+if (process.env.CUTE_ISLAND_NO_SANDBOX === '1') {
+  app.commandLine.appendSwitch('no-sandbox')
+}
+
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    reveal()
+  })
+  app.whenReady().then(boot).catch((error: unknown) => {
+    console.error(error)
+    app.exit(1)
+  })
+}
+
+function readPort(): number {
+  const raw = process.env.CUTE_ISLAND_PORT ?? '17321'
+  const port = Number(raw)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`CUTE_ISLAND_PORT 无效: ${raw}`)
+  }
+  return port
+}
+
+async function boot(): Promise<void> {
+  if (process.platform === 'win32') app.setAppUserModelId('com.cuteisland.app')
+  store = new ActivityStore()
+  const port = readPort()
+  try {
+    server = await startStatusServer(store, {
+      port,
+      token: process.env.CUTE_ISLAND_TOKEN
+    })
+  } catch (error) {
+    dialog.showErrorBox('Cute Island', `状态服务启动失败（端口 ${port}）。\n${errorText(error)}`)
+    app.quit()
+    return
+  }
+  console.log(`Cute Island 正在监听 http://127.0.0.1:${server.port}`)
+  mainWindow = createWindow(store)
+  tray = createTray()
+  wireIpc(store)
+  app.on('before-quit', () => {
+    tray?.destroy()
+    store?.dispose()
+    void server?.close()
+  })
+  app.on('activate', () => reveal())
+  app.on('window-all-closed', () => {
+    app.quit()
+  })
+}
+
+function createWindow(activityStore: ActivityStore): BrowserWindow {
+  const win = new BrowserWindow({
+    width: WINDOW_WIDTH,
+    height: WINDOW_HEIGHT,
+    show: false,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    focusable: false,
+    hasShadow: false,
+    thickFrame: false,
+    backgroundColor: '#00000000',
+    type: process.platform === 'darwin' ? 'panel' : undefined,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false
+    }
+  })
+  win.setAlwaysOnTop(true, 'screen-saver')
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  if (process.platform === 'darwin') win.setWindowButtonVisibility(false)
+  placeWindow(win)
+  win.setIgnoreMouseEvents(true, { forward: true })
+  const reposition = (): void => {
+    if (!win.isDestroyed()) placeWindow(win)
+  }
+  screen.on('display-metrics-changed', reposition)
+  win.on('closed', () => {
+    screen.off('display-metrics-changed', reposition)
+    if (mainWindow === win) mainWindow = null
+  })
+  activityStore.subscribe((activities) => {
+    if (!win.isDestroyed()) win.webContents.send('island:activities', activities)
+  })
+  win.once('ready-to-show', () => {
+    if (!win.isDestroyed()) win.showInactive()
+  })
+  if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  else void win.loadFile(path.join(__dirname, '../renderer/index.html'))
+  return win
+}
+
+function placeWindow(win: BrowserWindow): void {
+  const { workArea } = screen.getPrimaryDisplay()
+  win.setBounds({
+    x: Math.round(workArea.x + (workArea.width - WINDOW_WIDTH) / 2),
+    y: workArea.y + 4,
+    width: WINDOW_WIDTH,
+    height: WINDOW_HEIGHT
+  })
+}
+
+function createTray(): Tray {
+  const icon = nativeImage.createFromDataURL(TRAY_ICON)
+  if (process.platform === 'darwin') icon.setTemplateImage(true)
+  const next = new Tray(icon)
+  next.setToolTip('Cute Island')
+  const menu = Menu.buildFromTemplate([
+    { label: '显示灵动岛', click: () => reveal() },
+    { label: '隐藏灵动岛', click: () => mainWindow?.hide() },
+    { label: '播放演示', click: () => void playDemo() },
+    { type: 'separator' },
+    { label: '退出', click: () => app.quit() }
+  ])
+  next.setContextMenu(menu)
+  next.on('click', () => reveal())
+  return next
+}
+
+function reveal(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  placeWindow(mainWindow)
+  mainWindow.showInactive()
+}
+
+function wireIpc(activityStore: ActivityStore): void {
+  ipcMain.on('island:set-ignore-mouse', (event, ignore: unknown) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || win.isDestroyed()) return
+    if (ignore === true) win.setIgnoreMouseEvents(true, { forward: true })
+    else if (ignore === false) win.setIgnoreMouseEvents(false)
+  })
+  ipcMain.handle('island:get-activities', () => activityStore.list())
+  ipcMain.handle('island:dismiss', (_event, id: unknown) => {
+    if (typeof id === 'string') activityStore.dismiss(id)
+  })
+  ipcMain.handle('island:play-demo', () => {
+    void playDemo()
+  })
+}
+
+async function playDemo(): Promise<void> {
+  if (!store) return
+  const token = ++demoToken
+  store.dismiss(DEMO_ID)
+  await playDemoFrames(
+    demoFrames,
+    (frame) => {
+      if (!store) return
+      if (frame.upsert) store.upsert(frame.upsert)
+      if (frame.end) {
+        try {
+          store.end(frame.end.id, frame.end)
+        } catch {
+          // The activity can disappear if a newer demo replaced it.
+        }
+      }
+    },
+    () => token !== demoToken
+  )
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : '未知错误'
+}

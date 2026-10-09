@@ -1,0 +1,414 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Noto Sans SC",
+    "Microsoft YaHei", sans-serif;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+}
+
+body {
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body[data-surface='web'] {
+  overflow: auto;
+  min-height: 100vh;
+  background:
+    radial-gradient(900px 420px at 50% 0%, rgba(90, 140, 190, 0.35), transparent 62%),
+    linear-gradient(180deg, #243140 0%, #12181f 48%, #0c1014 100%);
+}
+
+.stage {
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 8px;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+.island {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  color: #fff;
+  background: #000;
+  cursor: pointer;
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.28),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.island::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  pointer-events: none;
+}
+
+.island-error {
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.28),
+    inset 0 0 0 1px rgba(255, 69, 58, 0.55);
+}
+
+.island-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.idle-mark {
+  width: 38px;
+  height: 5px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.compact {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 0 10px;
+  box-sizing: border-box;
+}
+
+.compact-title,
+.expanded-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 640;
+  letter-spacing: -0.02em;
+}
+
+.compact-title {
+  font-size: 13.5px;
+}
+
+.badge {
+  min-width: 22px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.expanded {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 16px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  text-align: left;
+  overflow: auto;
+}
+
+.expanded-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.head-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.state-label,
+.elapsed,
+.detail,
+.others,
+.steps {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.state-label {
+  margin-top: 1px;
+  font-size: 11px;
+}
+
+.elapsed {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.close {
+  border: 0;
+  background: rgba(255, 255, 255, 0.14);
+  color: white;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.close:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.expanded-title {
+  margin-top: 12px;
+  font-size: 16px;
+}
+
+.detail {
+  margin-top: 4px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.island-error .compact-title,
+.island-error .expanded-title {
+  color: #ff6961;
+}
+
+.progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.track {
+  height: 4px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.bar {
+  height: 100%;
+  border-radius: inherit;
+  background: white;
+}
+
+.steps {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.steps li::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.35);
+  flex: none;
+}
+
+.steps li[data-status='done']::before {
+  background: #32d74b;
+}
+
+.steps li[data-status='active']::before {
+  background: #0a84ff;
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.25);
+}
+
+.steps li[data-status='error']::before {
+  background: #ff453a;
+}
+
+.others {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.others-label {
+  margin-bottom: 4px;
+}
+
+.other-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.other-row span:first-child {
+  color: white;
+  flex: none;
+}
+
+.other-row span:last-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.glyph {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.orb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.65);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.spinner {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  border-top-color: white;
+  animation: spin 0.8s linear infinite;
+}
+
+.pause {
+  display: flex;
+  gap: 3px;
+}
+
+.pause i {
+  width: 3px;
+  height: 12px;
+  border-radius: 99px;
+  background: white;
+}
+
+.glyph svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: white;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glyph-success svg {
+  stroke: #32d74b;
+  animation: pop 0.35s ease;
+}
+
+.glyph-error svg {
+  stroke: #ff6961;
+}
+
+.dev-panel {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.dev-panel button {
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: white;
+  color: black;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    transform: scale(0.82);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes pop {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .orb,
+  .glyph-success svg {
+    animation: none;
+  }
+}
