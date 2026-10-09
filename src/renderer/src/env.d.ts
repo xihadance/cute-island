@@ -26,6 +26,7 @@ export interface IslandApi {
   setInteraction?: (hit: IslandHit) => void
   onPointer?: (callback: (sample: PointerSample) => void) => () => void
   simulateError?: () => void
+  simulateAgents?: () => void
   clear?: () => void
 }
 

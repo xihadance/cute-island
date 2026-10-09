@@ -144,6 +144,9 @@ export function App() {
           <button type="button" data-testid="simulate-error" onClick={() => bridge.simulateError?.()}>
             模拟失败
           </button>
+          <button type="button" data-testid="simulate-agents" onClick={() => bridge.simulateAgents?.()}>
+            多个 agent
+          </button>
           <button
             type="button"
             data-testid="clear"

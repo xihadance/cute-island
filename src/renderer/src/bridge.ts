@@ -58,6 +58,33 @@ function createMockBridge(): IslandApi {
         ]
       })
     },
+    simulateAgents() {
+      store.upsert({
+        id: 'pair-claude',
+        agent: 'Claude Code',
+        state: 'running',
+        title: '补上表单校验',
+        detail: '修好登录页'
+      })
+      store.upsert({
+        id: 'pair-codex',
+        agent: 'Codex',
+        state: 'thinking',
+        title: '正在看测试'
+      })
+      store.upsert({
+        id: 'pair-gemini',
+        agent: 'Gemini',
+        state: 'waiting',
+        title: '等待确认'
+      })
+      store.upsert({
+        id: 'pair-cursor',
+        agent: 'Cursor',
+        state: 'running',
+        title: '正在改灵动岛'
+      })
+    },
     clear() {
       demoToken += 1
       store.clear()

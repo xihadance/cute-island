@@ -81,11 +81,48 @@ body[data-surface='web'] {
 .compact {
   width: 100%;
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  padding: 0 14px 0 10px;
+  padding: 0 12px 0 8px;
   box-sizing: border-box;
+}
+
+.compact-agent {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.compact-others {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.agent-badge {
+  width: 18px;
+  height: 18px;
+  border-radius: 99px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: #111;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.agent-badge.badge-running {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.16);
+}
+
+.agent-badge.badge-thinking {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.agent-badge.badge-error {
+  box-shadow: 0 0 0 2px #ff6961;
 }
 
 .compact-title,
@@ -268,16 +305,18 @@ body[data-surface='web'] {
 
 .other-row {
   display: flex;
+  align-items: center;
   gap: 8px;
   min-width: 0;
+  margin-top: 4px;
 }
 
-.other-row span:first-child {
-  color: white;
+.other-agent {
   flex: none;
+  font-weight: 700;
 }
 
-.other-row span:last-child {
+.other-title {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;

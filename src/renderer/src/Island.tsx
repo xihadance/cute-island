@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion, type Transition } from 'framer-motion'
 import { STATE_LABEL, expandedHeight, type Activity, type ActivityState } from '../../shared/activity'
+import { agentAppearance } from './agent-appearance'
 
 interface IslandProps {
   activity?: Activity
@@ -17,7 +18,7 @@ export function Island({ activity, others, expanded, resting, onToggle, onDismis
   const reduced = useReducedMotion()
   const mode = !activity ? (resting ? 'rest' : 'idle') : expanded ? 'expanded' : 'compact'
   const metrics = metricsFor(mode, activity, others.length)
-  const contentKey = activity ? `${mode}:${activity.state}` : mode
+  const contentKey = activity ? `${mode}:${activity.agent}:${activity.state}` : mode
 
   return (
     <motion.div
@@ -25,6 +26,7 @@ export function Island({ activity, others, expanded, resting, onToggle, onDismis
       data-testid="island"
       data-mode={mode}
       data-state={activity?.state ?? 'idle'}
+      data-agent={activity ? agentAppearance(activity.agent).key : 'idle'}
       className={`island ${activity ? `island-${activity.state}` : 'island-idle'}`}
       aria-expanded={expanded}
       aria-label={activity ? `${activity.agent} ${activity.title}` : '灵动岛'}
@@ -55,7 +57,7 @@ export function Island({ activity, others, expanded, resting, onToggle, onDismis
           {mode === 'expanded' && activity && (
             <Expanded activity={activity} others={others} onDismiss={onDismiss} />
           )}
-          {mode === 'compact' && activity && <Compact activity={activity} others={others.length} />}
+          {mode === 'compact' && activity && <Compact activity={activity} others={others} />}
           {mode === 'idle' && <span className="idle-mark" />}
         </motion.div>
       </AnimatePresence>
@@ -63,14 +65,26 @@ export function Island({ activity, others, expanded, resting, onToggle, onDismis
   )
 }
 
-function Compact({ activity, others }: { activity: Activity; others: number }) {
+function Compact({ activity, others }: { activity: Activity; others: Activity[] }) {
+  const appearance = agentAppearance(activity.agent)
+  const extra = others.slice(0, 3)
   return (
     <div className="compact">
-      <StatusGlyph state={activity.state} />
+      <AgentBadge agent={activity.agent} state={activity.state} />
+      <span className="compact-agent" data-testid="island-agent" style={{ color: appearance.color }}>
+        {appearance.short}
+      </span>
       <span className="compact-title" data-testid="island-title">
         {activity.title}
       </span>
-      {others > 0 && <span className="badge">+{others}</span>}
+      {extra.length > 0 && (
+        <span className="compact-others">
+          {extra.map((item) => (
+            <AgentBadge key={item.id} agent={item.agent} state={item.state} />
+          ))}
+          {others.length > extra.length && <span className="badge">+{others.length - extra.length}</span>}
+        </span>
+      )}
     </div>
   )
 }
@@ -86,12 +100,15 @@ function Expanded({
 }) {
   const elapsed = useElapsed(activity.startedAt)
   const steps = activity.steps.slice(-4)
+  const appearance = agentAppearance(activity.agent)
   return (
     <div className="expanded">
       <div className="expanded-head">
-        <StatusGlyph state={activity.state} />
+        <AgentBadge agent={activity.agent} state={activity.state} />
         <div className="head-copy">
-          <div className="agent">{activity.agent}</div>
+          <div className="agent" style={{ color: appearance.color }}>
+            {appearance.label}
+          </div>
           <div className="state-label">{STATE_LABEL[activity.state]}</div>
         </div>
         <div className="elapsed">{elapsed}</div>
@@ -130,12 +147,18 @@ function Expanded({
       {others.length > 0 && (
         <div className="others" data-testid="other-count">
           <div className="others-label">另外 {others.length} 个活动</div>
-          {others.slice(0, 3).map((item) => (
-            <div key={item.id} className="other-row">
-              <span>{item.agent}</span>
-              <span>{item.title}</span>
-            </div>
-          ))}
+          {others.slice(0, 3).map((item) => {
+            const appearance = agentAppearance(item.agent)
+            return (
+              <div key={item.id} className="other-row" data-agent={appearance.key}>
+                <AgentBadge agent={item.agent} state={item.state} />
+                <span className="other-agent" style={{ color: appearance.color }}>
+                  {appearance.short}
+                </span>
+                <span className="other-title">{item.title}</span>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
@@ -154,28 +177,16 @@ function Progress({ value }: { value: number }) {
   )
 }
 
-function StatusGlyph({ state }: { state: ActivityState }) {
+function AgentBadge({ agent, state }: { agent: string; state: ActivityState }) {
+  const appearance = agentAppearance(agent)
   return (
-    <span className={`glyph glyph-${state}`} aria-hidden="true">
-      {state === 'thinking' && <span className="orb" />}
-      {state === 'running' && <span className="spinner" />}
-      {state === 'waiting' && (
-        <span className="pause">
-          <i />
-          <i />
-        </span>
-      )}
-      {state === 'success' && (
-        <svg viewBox="0 0 16 16">
-          <path d="M3.2 8.3 6.4 11.4 12.8 4.6" />
-        </svg>
-      )}
-      {state === 'error' && (
-        <svg viewBox="0 0 16 16">
-          <path d="M8 3.2v6.2" />
-          <circle cx="8" cy="12.4" r="0.8" />
-        </svg>
-      )}
+    <span
+      className={`agent-badge badge-${state} agent-${appearance.key}`}
+      style={{ background: appearance.color }}
+      title={appearance.label}
+      aria-hidden="true"
+    >
+      {appearance.mark}
     </span>
   )
 }
@@ -187,7 +198,7 @@ function metricsFor(
 ): { width: number; height: number; radius: number } {
   if (mode === 'rest') return { width: 92, height: 12, radius: 6 }
   if (mode === 'idle') return { width: 126, height: 36, radius: 18 }
-  if (mode === 'compact') return { width: 286, height: 40, radius: 20 }
+  if (mode === 'compact') return { width: otherCount > 0 ? 390 : 340, height: 40, radius: 20 }
   return {
     width: 380,
     height: activity ? expandedHeight(activity, otherCount) : 168,

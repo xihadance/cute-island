@@ -112,7 +112,7 @@ export function expandedHeight(activity: Activity, otherCount: number): number {
   if (activity.detail) height += 20
   if (typeof activity.progress === 'number') height += 22
   height += Math.min(activity.steps.length, 4) * 22
-  if (otherCount > 0) height += 22 + Math.min(otherCount, 3) * 18
+  if (otherCount > 0) height += 22 + Math.min(otherCount, 3) * 22
   return Math.min(Math.max(height, 150), 320)
 }
 
