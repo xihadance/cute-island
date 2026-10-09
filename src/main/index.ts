@@ -5,6 +5,8 @@ import { ActivityStore } from '../shared/activity'
 import { DEMO_ID, demoFrames, playDemoFrames } from '../shared/demo'
 import { startStatusServer, type StatusServer } from './server'
 import { TRAY_ICON } from './tray-icon'
+import { constrainPosition, positionAfterDrag, type Point } from '../shared/window-position'
+import { readWindowPosition, saveWindowPosition } from './window-position'
 
 const WINDOW_WIDTH = 460
 const WINDOW_HEIGHT = 560
@@ -15,6 +17,7 @@ let server: StatusServer | null = null
 let store: ActivityStore | null = null
 let watcher: SessionWatcher | null = null
 let demoToken = 0
+let preferredPosition: Point | undefined
 
 if (process.platform === 'linux') {
   app.commandLine.appendSwitch('enable-transparent-visuals')
@@ -68,6 +71,7 @@ async function boot(): Promise<void> {
     watcher = new SessionWatcher(store)
     watcher.start()
   }
+  preferredPosition = readWindowPosition(positionFile())
   mainWindow = createWindow(store)
   tray = createTray()
   wireIpc(store)
@@ -114,14 +118,9 @@ function createWindow(activityStore: ActivityStore): BrowserWindow {
   placeWindow(win)
   ignoreMouse(win, true)
   const stopTracking = trackPointer(win)
-  const reposition = (): void => {
-    if (!win.isDestroyed()) placeWindow(win)
-  }
-  screen.on('display-metrics-changed', reposition)
   win.on('closed', () => {
     stopTracking()
     unsubscribe()
-    screen.off('display-metrics-changed', reposition)
     if (mainWindow === win) mainWindow = null
   })
   const unsubscribe = activityStore.subscribe((activities) => {
@@ -135,14 +134,24 @@ function createWindow(activityStore: ActivityStore): BrowserWindow {
   return win
 }
 
-function placeWindow(win: BrowserWindow): void {
+function defaultPosition(): Point {
   const { workArea } = screen.getPrimaryDisplay()
-  win.setBounds({
+  return {
     x: Math.round(workArea.x + (workArea.width - WINDOW_WIDTH) / 2),
-    y: workArea.y + 4,
-    width: WINDOW_WIDTH,
-    height: WINDOW_HEIGHT
-  })
+    y: workArea.y + 4
+  }
+}
+
+function positionFile(): string {
+  return path.join(app.getPath('userData'), 'window-position.json')
+}
+
+function placeWindow(win: BrowserWindow, content = { x: 167, y: 8, width: 126, height: 36 }): void {
+  const desired = preferredPosition ?? defaultPosition()
+  const display = screen.getDisplayNearestPoint({ x: desired.x + WINDOW_WIDTH / 2, y: desired.y + content.y })
+  const next = constrainPosition(desired, content, display.workArea)
+  const current = win.getBounds()
+  if (current.x !== next.x || current.y !== next.y) win.setPosition(next.x, next.y)
 }
 
 function createTray(): Tray {
@@ -153,6 +162,12 @@ function createTray(): Tray {
   const menu = Menu.buildFromTemplate([
     { label: '显示灵动岛', click: () => reveal() },
     { label: '隐藏灵动岛', click: () => mainWindow?.hide() },
+    { label: '恢复顶部居中', click: () => {
+      preferredPosition = defaultPosition()
+      saveWindowPosition(positionFile(), preferredPosition)
+      if (mainWindow && !mainWindow.isDestroyed()) placeWindow(mainWindow)
+      reveal()
+    } },
     { label: '播放演示', click: () => void playDemo() },
     { type: 'separator' },
     { label: '退出', click: () => app.quit() }
@@ -171,7 +186,6 @@ function ignoreMouse(win: BrowserWindow, ignore: boolean): void {
 
 function reveal(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  placeWindow(mainWindow)
   mainWindow.showInactive()
 }
 
@@ -187,13 +201,54 @@ function trackPointer(win: BrowserWindow): () => void {
   let interaction: Interaction = { expanded: false, x: 0, y: 0, width: 0, height: 0 }
   let ignoring = true
   let lastPointer = ''
+  let drag: { start: Point; origin: Point; active: boolean } | undefined
+  const applyDrag = (): void => {
+    if (!drag?.active || win.isDestroyed()) return
+    const cursor = screen.getCursorScreenPoint()
+    const display = screen.getDisplayNearestPoint(cursor)
+    const position = constrainPosition(positionAfterDrag(drag.origin, drag.start, cursor), interaction, display.workArea)
+    const current = win.getBounds()
+    if (current.x !== position.x || current.y !== position.y) win.setPosition(position.x, position.y)
+  }
+  const endDrag = (): void => {
+    if (drag?.active && !win.isDestroyed()) {
+      applyDrag()
+      const { x, y } = win.getBounds()
+      preferredPosition = { x, y }
+      saveWindowPosition(positionFile(), preferredPosition)
+    }
+    drag = undefined
+  }
+  const onDrag = (event: Electron.IpcMainEvent, phase: unknown): void => {
+    if (win.isDestroyed() || event.sender !== win.webContents) return
+    if (phase === 'start') {
+      const { x, y } = win.getBounds()
+      drag = { start: screen.getCursorScreenPoint(), origin: { x, y }, active: false }
+      ignoring = false
+      ignoreMouse(win, false)
+    } else if (phase === 'move' && drag) {
+      drag.active = true
+      applyDrag()
+    } else if (phase === 'end') endDrag()
+  }
   const onInteraction = (_event: Electron.IpcMainEvent, payload: unknown): void => {
     if (!isInteraction(payload) || win.isDestroyed() || _event.sender !== win.webContents) return
     interaction = payload
+    if (!drag && interaction.width > 0) placeWindow(win, interaction)
   }
+  const reposition = (): void => {
+    if (!win.isDestroyed() && !drag) placeWindow(win, interaction)
+  }
+  ipcMain.on('island:drag', onDrag)
   ipcMain.on('island:interaction', onInteraction)
+  screen.on('display-metrics-changed', reposition)
+  screen.on('display-added', reposition)
+  screen.on('display-removed', reposition)
+  win.on('hide', endDrag)
+  win.webContents.on('render-process-gone', endDrag)
   const timer = setInterval(() => {
     if (win.isDestroyed() || !win.isVisible()) return
+    applyDrag()
     const point = screen.getCursorScreenPoint()
     const bounds = win.getBounds()
     const localX = point.x - bounds.x
@@ -205,7 +260,7 @@ function trackPointer(win: BrowserWindow): () => void {
       localY >= interaction.y &&
       localX <= interaction.x + interaction.width &&
       localY <= interaction.y + interaction.height
-    const ignore = interaction.expanded ? false : !overIsland
+    const ignore = drag || interaction.expanded ? false : !overIsland
     if (ignore !== ignoring) {
       ignoring = ignore
       ignoreMouse(win, ignore)
@@ -219,7 +274,11 @@ function trackPointer(win: BrowserWindow): () => void {
   }, 32)
   return () => {
     clearInterval(timer)
+    ipcMain.removeListener('island:drag', onDrag)
     ipcMain.removeListener('island:interaction', onInteraction)
+    screen.off('display-metrics-changed', reposition)
+    screen.off('display-added', reposition)
+    screen.off('display-removed', reposition)
   }
 }
 

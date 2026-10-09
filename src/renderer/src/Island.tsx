@@ -4,8 +4,13 @@ import { expandedHeight, operationHeight, priorityRank, type Activity, type Acti
 import { agentAppearance } from './agent-appearance'
 import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon } from './agent-icons'
 import { OperationDetails, Status, Steps } from './ActivityDetails'
+import { useIslandDrag } from './useIslandDrag'
+import type { IslandApi } from './env'
 
 interface IslandProps {
+  bridge: IslandApi
+  hovered: boolean
+  onHover: (value: boolean) => void
   activities: Activity[]
   expanded: boolean
   selectedId: string | null
@@ -17,8 +22,11 @@ interface IslandProps {
 
 const SPRING: Transition = { type: 'spring', stiffness: 520, damping: 38, mass: 0.72 }
 
-export function Island({ activities, expanded, selectedId, resting, onToggle, onSelect, onDismiss }: IslandProps) {
+export function Island({ bridge, hovered, onHover, activities, expanded, selectedId, resting, onToggle, onSelect, onDismiss }: IslandProps) {
   const reduced = useReducedMotion()
+  const drag = useIslandDrag(bridge)
+  const [focused, setFocused] = useState(false)
+  const solid = hovered || focused || drag.dragging || expanded || selectedId !== null
   const activity = activities[0]
   const stacked = activities.length > 1
   const mode = !activity ? (resting ? 'rest' : 'idle') : stacked ? 'stack' : expanded ? 'expanded' : 'compact'
@@ -32,6 +40,17 @@ export function Island({ activities, expanded, selectedId, resting, onToggle, on
       data-mode={mode}
       data-state={activity?.state ?? 'idle'}
       data-agent={activity ? agentAppearance(activity.agent).key : 'idle'}
+      data-solid={solid}
+      data-dragging={drag.dragging}
+      style={{ left: drag.offset.x, top: drag.offset.y }}
+      onPointerDownCapture={drag.onPointerDownCapture}
+      onClickCapture={drag.onClickCapture}
+      onPointerEnter={() => onHover(true)}
+      onPointerLeave={() => onHover(false)}
+      onFocusCapture={() => setFocused(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false)
+      }}
       className={`island ${activity ? `island-${activity.state}` : 'island-idle'}`}
       aria-expanded={stacked ? selectedId !== null : expanded}
       aria-label={
@@ -46,9 +65,9 @@ export function Island({ activities, expanded, selectedId, resting, onToggle, on
         width: metrics.width,
         height: metrics.height,
         borderRadius: metrics.radius,
-        opacity: mode === 'rest' ? 0.45 : 1
+        opacity: solid ? 1 : mode === 'rest' ? 0.35 : 0.64
       }}
-      transition={reduced ? { duration: 0.01 } : SPRING}
+      transition={{ ...(reduced ? { duration: 0.01 } : SPRING), opacity: { duration: reduced ? 0.01 : 0.18 } }}
       onClick={() => {
         if (stacked) {
           onSelect(null)

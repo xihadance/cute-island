@@ -5,6 +5,7 @@
 </p>
 
 Windows、macOS、Linux 上的 PC 灵动岛。黑胶囊贴在屏幕顶部正中，用来看 agent 正在做什么。
+首次启动默认位于顶部居中，可以按住胶囊或会话标题拖动；松手记住位置，重启后恢复。默认半透明，鼠标悬浮、拖动、键盘聚焦或点击展开时恢复实色，收起并移开焦点后恢复半透明。
 
 闲置时它收成一条细胶囊。有活动时变成紧凑态：左侧是状态图标，右侧是一行标题。点一下展开，能看到 agent 名称、说明、进度、最近步骤和耗时。成功会短暂打勾后收回；失败保持展开，直到被新状态盖掉，或点「关闭」。
 
@@ -92,6 +93,8 @@ Windows 上这些目录在 `%USERPROFILE%` 下面，布局相同。可以用 `CL
 
 窗口无边框、透明、置顶，不进任务栏，也不抢焦点。只有胶囊本身接收点击，周围的透明区域会把鼠标让给下面的窗口。托盘菜单可以显示、隐藏、播放演示或退出。
 
+拖动超过 5 像素才移动窗口，轻点仍展开详情；命令内容保留选择复制和滚动，关闭按钮可正常点击。胶囊可拖到屏幕边缘，展开时会自动避让边界，收起后回到拖动时的位置。显示器断开后会将胶囊移回可见区域；托盘「恢复顶部居中」可重置位置。位置记录保存在应用用户数据目录的 `window-position.json`，浏览器预览使用本地存储。
+
 macOS 使用 panel，并在全屏空间保持可见。Windows 和 Linux 使用 screen-saver 级别置顶。Linux 需要桌面合成器，透明窗口才能透出后面的内容。
 
 ## 打包
@@ -112,11 +115,20 @@ node scripts/smoke-packaged.cjs "release/win-unpacked/Cute Island.exe"
 
 它验证启动前会话恢复、HTTP、preload、展开/关闭、成功自动收起和空闲布局开销，并将截图存入 `release/`。
 
-推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.3`。
+拖动与透明度集成检查（使用隔离的 Electron 用户目录和模拟光标，不移动你的鼠标）：
 
 ```bash
-git tag v0.1.3
-git push origin v0.1.3
+npm run build
+node scripts/smoke-interaction.cjs
+```
+
+它验证实际窗口移动、点击与拖动区分、命令选择、悬浮与展开的透明度、屏幕边缘避让、重启恢复和托盘重置，截图保存在 `output/playwright/`。
+
+推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.4`。
+
+```bash
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 ## 图标

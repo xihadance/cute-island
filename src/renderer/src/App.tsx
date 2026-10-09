@@ -12,10 +12,12 @@ export function App() {
   const [expanded, setExpanded] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [pointerNear, setPointerNear] = useState(false)
+  const [hovered, setHovered] = useState(false)
   const [resting, setResting] = useState(false)
   const expandedRef = useRef(false)
   const hoveringRef = useRef(false)
-  expandedRef.current = expanded
+  const interacting = expanded || selectedId !== null
+  expandedRef.current = interacting
 
   useEffect(() => {
     let sawLiveEvent = false
@@ -65,16 +67,19 @@ export function App() {
     if (bridge.onPointer) {
       return bridge.onPointer((sample) => {
         setPointerNear(sample.overWindow && sample.y <= 72)
+        setHovered(sample.overIsland)
       })
     }
     const syncIgnore = (overIsland: boolean): void => {
       hoveringRef.current = overIsland
+      setHovered(overIsland)
       bridge.setIgnoreMouse(!(overIsland || expandedRef.current))
     }
     const onMove = (event: MouseEvent): void => {
-      setPointerNear(event.clientY <= 64)
       const element = document.elementFromPoint(event.clientX, event.clientY)
-      syncIgnore(!!element?.closest('[data-testid="island"]'))
+      const overIsland = !!element?.closest('[data-testid="island"]')
+      setPointerNear(overIsland)
+      syncIgnore(overIsland)
     }
     const onLeave = (event: MouseEvent): void => {
       if (event.relatedTarget) return
@@ -92,8 +97,8 @@ export function App() {
 
   useEffect(() => {
     if (bridge.onPointer) return
-    bridge.setIgnoreMouse(!(hoveringRef.current || expanded))
-  }, [bridge, expanded])
+    bridge.setIgnoreMouse(!(hoveringRef.current || interacting))
+  }, [bridge, interacting])
 
   useEffect(() => {
     if (!bridge.setInteraction) return
@@ -102,10 +107,10 @@ export function App() {
     let last = ''
     const syncBounds = (): void => {
       const rect = element.getBoundingClientRect()
-      const next = `${expanded}:${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}`
+      const next = `${interacting}:${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}`
       if (next !== last) {
         last = next
-        bridge.setInteraction?.({ expanded, x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+        bridge.setInteraction?.({ expanded: interacting, x: rect.x, y: rect.y, width: rect.width, height: rect.height })
       }
     }
     // Spring animations resize the island; an idle island needs no layout polling.
@@ -117,7 +122,7 @@ export function App() {
       observer.disconnect()
       window.removeEventListener('resize', syncBounds)
     }
-  }, [bridge, expanded])
+  }, [bridge, interacting])
 
   const toggle = (): void => {
     if (!primary || primary.state === 'error') {
@@ -131,6 +136,7 @@ export function App() {
     if (event.target !== event.currentTarget) return
     if (primary?.state === 'error') return
     setExpanded(false)
+    setSelectedId(null)
   }
 
   return (
@@ -140,6 +146,9 @@ export function App() {
           {activities.length > 0 ? activities.map((item) => `${item.agent} ${STATE_LABEL[item.state]} ${item.title}`).join('，') : '空闲'}
         </div>
         <Island
+          bridge={bridge}
+          hovered={hovered}
+          onHover={setHovered}
           activities={activities}
           expanded={expanded && !!primary && !stacked}
           selectedId={selectedId}

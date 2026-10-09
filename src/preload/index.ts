@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { Activity } from '../shared/activity'
 
 const island = {
+  dragWindow(phase: 'start' | 'move' | 'end'): void {
+    ipcRenderer.send('island:drag', phase)
+  },
   setIgnoreMouse(ignore: boolean): void {
     ipcRenderer.send('island:set-ignore-mouse', ignore)
   },

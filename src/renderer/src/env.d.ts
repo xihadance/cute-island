@@ -18,6 +18,7 @@ export interface IslandHit {
 }
 
 export interface IslandApi {
+  dragWindow?: (phase: 'start' | 'move' | 'end') => void
   setIgnoreMouse: (ignore: boolean) => void
   getActivities: () => Promise<Activity[]>
   dismiss: (id: string) => Promise<void>
