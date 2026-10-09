@@ -1,36 +1,45 @@
 import { useEffect, useId, useState } from 'react'
 import { AnimatePresence, motion, type Transition } from 'framer-motion'
-import { STATE_LABEL, expandedHeight, type Activity, type ActivityState } from '../../shared/activity'
+import { STATE_LABEL, expandedHeight, priorityRank, type Activity, type ActivityState } from '../../shared/activity'
 import { agentAppearance } from './agent-appearance'
 import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon } from './agent-icons'
 
 interface IslandProps {
-  activity?: Activity
-  others: Activity[]
+  activities: Activity[]
   expanded: boolean
+  selectedId: string | null
   resting: boolean
   onToggle: () => void
-  onDismiss: () => void
+  onSelect: (id: string | null) => void
+  onDismiss: (id: string) => void
 }
 
 const SPRING: Transition = { type: 'spring', stiffness: 520, damping: 38, mass: 0.72 }
 
-export function Island({ activity, others, expanded, resting, onToggle, onDismiss }: IslandProps) {
+export function Island({ activities, expanded, selectedId, resting, onToggle, onSelect, onDismiss }: IslandProps) {
   const reduced = useReducedMotion()
-  const mode = !activity ? (resting ? 'rest' : 'idle') : expanded ? 'expanded' : 'compact'
-  const metrics = metricsFor(mode, activity, others.length)
-  const contentKey = activity ? `${mode}:${activity.agent}:${activity.state}` : mode
+  const activity = activities[0]
+  const stacked = activities.length > 1
+  const mode = !activity ? (resting ? 'rest' : 'idle') : stacked ? 'stack' : expanded ? 'expanded' : 'compact'
+  const metrics = metricsFor(mode, activity, activities, selectedId)
+  const contentKey = stacked ? 'stack' : activity ? `${mode}:${activity.agent}:${activity.state}` : mode
 
   return (
     <motion.div
-      tabIndex={0}
+      tabIndex={stacked ? -1 : 0}
       data-testid="island"
       data-mode={mode}
       data-state={activity?.state ?? 'idle'}
       data-agent={activity ? agentAppearance(activity.agent).key : 'idle'}
       className={`island ${activity ? `island-${activity.state}` : 'island-idle'}`}
-      aria-expanded={expanded}
-      aria-label={activity ? `${activity.agent} ${activity.title}` : '灵动岛'}
+      aria-expanded={stacked ? selectedId !== null : expanded}
+      aria-label={
+        stacked
+          ? activities.map((item) => `${item.agent} ${item.title}`).join('，')
+          : activity
+            ? `${activity.agent} ${activity.title}`
+            : '灵动岛'
+      }
       initial={{ width: 86, height: 10, borderRadius: 5, opacity: 0 }}
       animate={{
         width: metrics.width,
@@ -39,7 +48,13 @@ export function Island({ activity, others, expanded, resting, onToggle, onDismis
         opacity: mode === 'rest' ? 0.45 : 1
       }}
       transition={reduced ? { duration: 0.01 } : SPRING}
-      onClick={onToggle}
+      onClick={() => {
+        if (stacked) {
+          onSelect(null)
+          return
+        }
+        onToggle()
+      }}
       onKeyDown={(event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return
         event.preventDefault()
@@ -55,10 +70,16 @@ export function Island({ activity, others, expanded, resting, onToggle, onDismis
           exit={reduced ? undefined : { opacity: 0, y: -4 }}
           transition={{ duration: reduced ? 0.01 : 0.16 }}
         >
-          {mode === 'expanded' && activity && (
-            <Expanded activity={activity} others={others} onDismiss={onDismiss} />
+          {mode === 'stack' && (
+            <SessionStack
+              activities={orderedSessions(activities)}
+              selectedId={selectedId}
+              onSelect={onSelect}
+              onDismiss={onDismiss}
+            />
           )}
-          {mode === 'compact' && activity && <Compact activity={activity} others={others} />}
+          {mode === 'expanded' && activity && <Expanded activity={activity} onDismiss={() => onDismiss(activity.id)} />}
+          {mode === 'compact' && activity && <Compact activity={activity} />}
           {mode === 'idle' && <span className="idle-mark" />}
         </motion.div>
       </AnimatePresence>
@@ -66,9 +87,8 @@ export function Island({ activity, others, expanded, resting, onToggle, onDismis
   )
 }
 
-function Compact({ activity, others }: { activity: Activity; others: Activity[] }) {
+function Compact({ activity }: { activity: Activity }) {
   const appearance = agentAppearance(activity.agent)
-  const extra = others.slice(0, 3)
   return (
     <div className="compact">
       <AgentBadge agent={activity.agent} state={activity.state} />
@@ -78,27 +98,97 @@ function Compact({ activity, others }: { activity: Activity; others: Activity[] 
       <span className="compact-title" data-testid="island-title">
         {activity.title}
       </span>
-      {extra.length > 0 && (
-        <span className="compact-others">
-          {extra.map((item) => (
-            <AgentBadge key={item.id} agent={item.agent} state={item.state} />
-          ))}
-          {others.length > extra.length && <span className="badge">+{others.length - extra.length}</span>}
+    </div>
+  )
+}
+
+function SessionStack({
+  activities,
+  selectedId,
+  onSelect,
+  onDismiss
+}: {
+  activities: Activity[]
+  selectedId: string | null
+  onSelect: (id: string | null) => void
+  onDismiss: (id: string) => void
+}) {
+  return (
+    <div className="session-stack" data-testid="session-stack">
+      {activities.map((activity) => (
+        <SessionRow
+          key={activity.id}
+          activity={activity}
+          open={selectedId === activity.id}
+          onSelect={() => onSelect(selectedId === activity.id ? null : activity.id)}
+          onDismiss={() => onDismiss(activity.id)}
+        />
+      ))}
+    </div>
+  )
+}
+
+function SessionRow({
+  activity,
+  open,
+  onSelect,
+  onDismiss
+}: {
+  activity: Activity
+  open: boolean
+  onSelect: () => void
+  onDismiss: () => void
+}) {
+  const appearance = agentAppearance(activity.agent)
+  return (
+    <div className={`session-row${open ? ' open' : ''}`} data-testid="session-row" data-session={activity.id}>
+      <button
+        type="button"
+        className="session-line"
+        onClick={(event) => {
+          event.stopPropagation()
+          onSelect()
+        }}
+      >
+        <AgentBadge agent={activity.agent} state={activity.state} />
+        <span className="compact-agent" style={{ color: appearance.color }}>
+          {appearance.short}
         </span>
+        <span className="compact-title">{activity.title}</span>
+        <span className={`session-state state-${activity.state}`}>{STATE_LABEL[activity.state]}</span>
+      </button>
+      {open && (
+        <div className="session-detail" onClick={(event) => event.stopPropagation()}>
+          {activity.detail && <div className="detail">{activity.detail}</div>}
+          {typeof activity.progress === 'number' && <Progress value={activity.progress} />}
+          {activity.steps.length > 0 && (
+            <ol className="steps">
+              {activity.steps.slice(-4).map((step) => (
+                <li key={step.id} data-status={step.status}>
+                  {step.label}
+                </li>
+              ))}
+            </ol>
+          )}
+          {activity.state === 'error' && (
+            <button
+              type="button"
+              className="close"
+              onClick={(event) => {
+                event.stopPropagation()
+                onDismiss()
+              }}
+            >
+              关闭
+            </button>
+          )}
+        </div>
       )}
     </div>
   )
 }
 
-function Expanded({
-  activity,
-  others,
-  onDismiss
-}: {
-  activity: Activity
-  others: Activity[]
-  onDismiss: () => void
-}) {
+function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () => void }) {
   const elapsed = useElapsed(activity.startedAt)
   const steps = activity.steps.slice(-4)
   const appearance = agentAppearance(activity.agent)
@@ -145,25 +235,18 @@ function Expanded({
           ))}
         </ol>
       )}
-      {others.length > 0 && (
-        <div className="others" data-testid="other-count">
-          <div className="others-label">另外 {others.length} 个活动</div>
-          {others.slice(0, 3).map((item) => {
-            const appearance = agentAppearance(item.agent)
-            return (
-              <div key={item.id} className="other-row" data-agent={appearance.key}>
-                <AgentBadge agent={item.agent} state={item.state} />
-                <span className="other-agent" style={{ color: appearance.color }}>
-                  {appearance.short}
-                </span>
-                <span className="other-title">{item.title}</span>
-              </div>
-            )
-          })}
-        </div>
-      )}
     </div>
   )
+}
+
+function orderedSessions(activities: Activity[]): Activity[] {
+  return [...activities].sort((left, right) => {
+    const byAgent = left.agent.localeCompare(right.agent, 'zh')
+    if (byAgent !== 0) return byAgent
+    const byRank = priorityRank(right.state) - priorityRank(left.state)
+    if (byRank !== 0) return byRank
+    return right.updatedAt - left.updatedAt
+  })
 }
 
 function Progress({ value }: { value: number }) {
@@ -193,18 +276,33 @@ function AgentBadge({ agent, state }: { agent: string; state: ActivityState }) {
 }
 
 function metricsFor(
-  mode: 'rest' | 'idle' | 'compact' | 'expanded',
+  mode: 'rest' | 'idle' | 'compact' | 'expanded' | 'stack',
   activity: Activity | undefined,
-  otherCount: number
+  activities: Activity[],
+  selectedId: string | null
 ): { width: number; height: number; radius: number } {
   if (mode === 'rest') return { width: 92, height: 12, radius: 6 }
   if (mode === 'idle') return { width: 126, height: 36, radius: 18 }
-  if (mode === 'compact') return { width: otherCount > 0 ? 390 : 340, height: 40, radius: 20 }
+  if (mode === 'compact') return { width: 340, height: 40, radius: 20 }
+  if (mode === 'stack') return { width: 400, height: stackHeight(activities, selectedId), radius: 28 }
   return {
     width: 380,
-    height: activity ? expandedHeight(activity, otherCount) : 168,
+    height: activity ? expandedHeight(activity, 0) : 168,
     radius: 40
   }
+}
+
+function stackHeight(activities: Activity[], selectedId: string | null): number {
+  let height = 36 + activities.length * 48
+  const selected = activities.find((item) => item.id === selectedId)
+  if (selected) {
+    height += 16
+    if (selected.detail) height += 32
+    if (typeof selected.progress === 'number') height += 28
+    height += Math.min(selected.steps.length, 4) * 26
+    if (selected.state === 'error') height += 40
+  }
+  return Math.min(Math.max(height, 56), 520)
 }
 
 function useElapsed(startedAt: number): string {

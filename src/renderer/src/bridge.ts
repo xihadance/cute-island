@@ -85,6 +85,29 @@ function createMockBridge(): IslandApi {
         title: '正在改灵动岛'
       })
     },
+    simulateSessions() {
+      store.upsert({
+        id: 'claude-login',
+        agent: 'Claude Code',
+        state: 'running',
+        title: '补上表单校验',
+        detail: '修好登录页',
+        steps: [{ id: 'edit', label: '修改登录页', status: 'active' }]
+      })
+      store.upsert({
+        id: 'claude-tests',
+        agent: 'Claude Code',
+        state: 'thinking',
+        title: '正在看测试',
+        detail: '核对空密码提示'
+      })
+      store.upsert({
+        id: 'claude-review',
+        agent: 'Claude Code',
+        state: 'waiting',
+        title: '等待确认修改'
+      })
+    },
     clear() {
       demoToken += 1
       store.clear()

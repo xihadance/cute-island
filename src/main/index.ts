@@ -7,7 +7,7 @@ import { startStatusServer, type StatusServer } from './server'
 import { TRAY_ICON } from './tray-icon'
 
 const WINDOW_WIDTH = 460
-const WINDOW_HEIGHT = 400
+const WINDOW_HEIGHT = 560
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null

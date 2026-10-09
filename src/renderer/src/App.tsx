@@ -10,6 +10,7 @@ export function App() {
   const bridge = bridgeRef.current
   const [activities, setActivities] = useState<Activity[]>([])
   const [expanded, setExpanded] = useState(false)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [pointerNear, setPointerNear] = useState(false)
   const [resting, setResting] = useState(false)
   const expandedRef = useRef(false)
@@ -29,12 +30,26 @@ export function App() {
   }, [bridge])
 
   const primary = activities[0]
-  const others = activities.slice(1)
+  const stacked = activities.length > 1
+  const errorId = activities.find((item) => item.state === 'error')?.id
 
   useEffect(() => {
-    if (!primary) setExpanded(false)
-    else if (primary.state === 'error') setExpanded(true)
-  }, [primary])
+    if (!primary) {
+      setExpanded(false)
+      setSelectedId(null)
+      return
+    }
+    if (stacked) {
+      setExpanded(false)
+      return
+    }
+    setSelectedId(null)
+    if (primary.state === 'error') setExpanded(true)
+  }, [primary, stacked])
+
+  useEffect(() => {
+    if (stacked && errorId) setSelectedId(errorId)
+  }, [stacked, errorId])
 
   useEffect(() => {
     if (primary || pointerNear || expanded) {
@@ -123,16 +138,18 @@ export function App() {
     <>
       <div className="stage" onMouseDown={collapseFromOutside}>
         <div className="sr-only" aria-live="polite">
-          {primary ? `${primary.agent} ${primary.title}` : '空闲'}
+          {activities.length > 0 ? activities.map((item) => `${item.agent} ${item.title}`).join('，') : '空闲'}
         </div>
         <Island
-          activity={primary}
-          others={others}
-          expanded={expanded && !!primary}
+          activities={activities}
+          expanded={expanded && !!primary && !stacked}
+          selectedId={selectedId}
           resting={resting && !primary}
           onToggle={toggle}
-          onDismiss={() => {
-            if (primary) void bridge.dismiss(primary.id)
+          onSelect={setSelectedId}
+          onDismiss={(id) => {
+            void bridge.dismiss(id)
+            setSelectedId((current) => (current === id ? null : current))
           }}
         />
       </div>
@@ -146,6 +163,9 @@ export function App() {
           </button>
           <button type="button" data-testid="simulate-agents" onClick={() => bridge.simulateAgents?.()}>
             多个 agent
+          </button>
+          <button type="button" data-testid="simulate-sessions" onClick={() => bridge.simulateSessions?.()}>
+            同 agent 多会话
           </button>
           <button
             type="button"

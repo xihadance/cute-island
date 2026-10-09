@@ -27,6 +27,7 @@ export interface IslandApi {
   onPointer?: (callback: (sample: PointerSample) => void) => () => void
   simulateError?: () => void
   simulateAgents?: () => void
+  simulateSessions?: () => void
   clear?: () => void
 }
 
