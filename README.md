@@ -1,5 +1,9 @@
 # Cute Island
 
+<p align="center">
+  <img src="build/icon.png" width="128" alt="Cute Island 图标：米色圆角底上的黑胶囊，里面是橙、绿、蓝三颗圆点">
+</p>
+
 Windows、macOS、Linux 上的 PC 灵动岛。黑胶囊贴在屏幕顶部正中，用来看 agent 正在做什么。
 
 闲置时它收成一条细胶囊。有活动时变成紧凑态：左侧是状态图标，右侧是一行标题。点一下展开，能看到 agent 名称、说明、进度、最近步骤和耗时。成功会短暂打勾后收回；失败保持展开，直到被新状态盖掉，或点「关闭」。
@@ -71,7 +75,7 @@ npm run build
 npx electron-builder
 ```
 
-配置已经写好 Windows NSIS、macOS dmg、Linux AppImage 和 deb。图标在 `build/icon.png`。
+配置已经写好 Windows NSIS、macOS dmg、Linux AppImage 和 deb。三端安装包都用 `build/icon.png`。
 
 推送版本标签后，GitHub Actions 会在三端打包，并发布到这个仓库的 Release：
 
@@ -79,3 +83,13 @@ npx electron-builder
 git tag v0.1.0
 git push origin v0.1.0
 ```
+
+## 图标
+
+应用图标是米色圆角方块，中间一条黑胶囊，胶囊里三颗圆点：橙、绿、蓝。
+
+| 文件 | 用途 |
+| --- | --- |
+| `build/icon.png` | 1024 像素，Windows、macOS、Linux 安装包图标 |
+| `build/tray.png` | 32 像素托盘图标源图。运行时托盘读 `src/main/tray-icon.ts` 里嵌进去的同一张图 |
+| `src/renderer/favicon.png` | 开发时浏览器页签图标，由 `src/renderer/index.html` 引用 |
