@@ -21,6 +21,30 @@ function schedulerOf(pending: Array<{ fn: () => void; cancelled: boolean }>) {
 }
 
 describe('ActivityStore', () => {
+  it('keeps approvals until an explicit update, prioritizes them, and isolates operation snapshots', () => {
+    const pending: Array<{ fn: () => void; cancelled: boolean }> = []
+    const store = new ActivityStore(schedulerOf(pending))
+    store.upsert({ id: 'run', state: 'running' })
+    store.upsert({ id: 'approval', state: 'approval', operation: { kind: 'command', command: 'npm install' },
+      steps: [{ id: 'install', label: '安装依赖', status: 'waiting', kind: 'command' }] })
+    expect(store.list()[0].id).toBe('approval')
+    expect(pending).toHaveLength(0)
+    store.get('approval')!.operation!.command = 'changed'
+    expect(store.get('approval')?.operation?.command).toBe('npm install')
+    store.upsert({ id: 'approval', state: 'running', operation: null })
+    expect(store.get('approval')?.operation).toBeUndefined()
+    expect(store.end('approval', { result: 'success' }).steps[0].status).toBe('done')
+    expect(pending).toHaveLength(1)
+  })
+
+  it('validates operation metadata and resets it on a new turn', () => {
+    const store = new ActivityStore(() => ({ cancel() {} }))
+    expect(() => store.upsert({ id: 'x', operation: { kind: 'invalid' } })).toThrow('operation.kind')
+    expect(() => store.upsert({ id: 'x', operation: { kind: 'command', command: 123 } })).toThrow('operation.command')
+    store.upsert({ id: 'x', state: 'success', operation: { kind: 'mcp', name: 'context7 / query_docs' } })
+    expect(store.upsert({ id: 'x', state: 'thinking' }).operation).toBeUndefined()
+  })
+
   it('merges updates and keeps the original start time', () => {
     let clock = 1_000
     const store = new ActivityStore(

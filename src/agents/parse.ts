@@ -1,4 +1,5 @@
-import type { ActivityState, ActivityStep } from '../shared/activity'
+import type { ActivityOperation, ActivityState, ActivityStep } from '../shared/activity'
+import { commandText, describeOperation } from './operation'
 
 export type AgentKind = 'claude' | 'codex' | 'gemini' | 'cursor'
 
@@ -16,16 +17,19 @@ export interface SessionView {
   state: ActivityState
   title: string
   detail?: string
+  operation?: ActivityOperation
   steps: ActivityStep[]
   /** The transcript itself says this turn finished. */
   terminal: boolean
 }
 
 interface AgentEvent {
-  kind: 'user' | 'thinking' | 'text' | 'tool' | 'tool_result' | 'done' | 'error'
+  kind: 'user' | 'thinking' | 'text' | 'tool' | 'approval' | 'tool_result' | 'done' | 'error'
   title: string
   ok?: boolean
   callId?: string
+  operation?: ActivityOperation
+  reason?: string
 }
 
 const TOOL_LABEL: Record<string, string> = {
@@ -135,10 +139,14 @@ function eventsFromCodexEvent(payload: unknown): AgentEvent[] {
     return [{ kind: 'error', title: cleanText(textOf(payload.message) || textOf(payload.error)) || '执行失败' }]
   }
   if (type === 'exec_command_begin' || type === 'exec_command_end') {
-    const command = textOf(payload.command) || joinCommand(payload.parsed_cmd)
-    if (type === 'exec_command_begin') return [{ kind: 'tool', title: toolTitle('shell', { command }) }]
+    const command = commandText(payload.command) || commandText(payload.parsed_cmd)
+    const callId = textOf(payload.call_id) || undefined
+    if (type === 'exec_command_begin') return [toolEvent('shell', { ...payload, command }, callId, false)]
     const ok = payload.exit_code === undefined || payload.exit_code === 0
-    return [{ kind: 'tool_result', title: ok ? '命令完成' : '命令失败', ok }]
+    return [{ kind: 'tool_result', title: ok ? '命令完成' : '命令失败', ok, callId }]
+  }
+  if (type === 'exec_approval_request' || type === 'apply_patch_approval_request') {
+    return [toolEvent(type === 'exec_approval_request' ? 'shell' : 'apply_patch', payload, textOf(payload.call_id) || undefined, true)]
   }
   return []
 }
@@ -149,7 +157,7 @@ function eventsFromResponseItem(payload: unknown): AgentEvent[] {
   if (type === 'function_call' || type === 'custom_tool_call' || type === 'tool_call') {
     const name = textOf(payload.name) || 'tool'
     const input = parseMaybeRecord(payload.arguments ?? payload.input ?? payload.args)
-    return [{ kind: 'tool', title: toolTitle(name, input), callId: textOf(payload.call_id) || undefined }]
+    return [toolEvent(name, input, textOf(payload.call_id) || undefined)]
   }
   if (type === 'function_call_output' || type === 'custom_tool_call_output' || type === 'tool_result') {
     const ok = payload.is_error !== true && payload.status !== 'error'
@@ -178,7 +186,7 @@ function eventsFromCursorToolCall(row: Record<string, unknown>): AgentEvent[] {
     const ok = !isRecord(body.result) || body.result.error === undefined
     return [{ kind: 'tool_result', title: toolTitle(name.replace(/ToolCall$/, ''), args), ok }]
   }
-  return [{ kind: 'tool', title: toolTitle(name.replace(/ToolCall$/, ''), args) }]
+  return [toolEvent(name.replace(/ToolCall$/, ''), args)]
 }
 
 function eventsFromToolCalls(calls: unknown[]): AgentEvent[] {
@@ -188,7 +196,7 @@ function eventsFromToolCalls(calls: unknown[]): AgentEvent[] {
     const input = parseMaybeRecord(call.args ?? call.input ?? call.arguments)
     const status = textOf(call.status)
     const callId = textOf(call.id) || undefined
-    const events: AgentEvent[] = [{ kind: 'tool', title: toolTitle(name, input), callId }]
+    const events: AgentEvent[] = [toolEvent(name, input, callId, status === 'awaiting_approval' || status === 'awaitingApproval')]
     if (status === 'success' || status === 'error' || status === 'cancelled' || call.result !== undefined) {
       events.push({
         kind: 'tool_result',
@@ -215,7 +223,7 @@ function eventsFromContent(content: unknown, role: string): AgentEvent[] {
       const call = isRecord(block.functionCall) ? block.functionCall : block
       const name = textOf(call.name) || 'tool'
       const input = parseMaybeRecord(call.input ?? call.args ?? call.arguments)
-      return [{ kind: 'tool' as const, title: toolTitle(name, input), callId: textOf(call.id) || undefined }]
+      return [toolEvent(name, input, textOf(call.id) || undefined)]
     }
     if (block.type === 'tool_result' || isRecord(block.functionResponse)) {
       const response = isRecord(block.functionResponse) ? block.functionResponse : block
@@ -248,9 +256,12 @@ function endedEvent(status: unknown, message: unknown): AgentEvent {
 function reduceEvents(events: AgentEvent[]): Omit<SessionView, 'id' | 'agent' | 'kind'> {
   const steps: ActivityStep[] = []
   const calls = new Map<string, ActivityStep>()
+  const stepEvents = new Map<string, AgentEvent>()
   let stepSequence = 0
   let title = '正在处理'
   let detail: string | undefined
+  let operation: ActivityOperation | undefined
+  let taskDetail: string | undefined
   let state: ActivityState = 'thinking'
   let terminal = false
 
@@ -258,24 +269,45 @@ function reduceEvents(events: AgentEvent[]): Omit<SessionView, 'id' | 'agent' | 
     if (event.kind === 'user') {
       steps.length = 0
       calls.clear()
+      stepEvents.clear()
       detail = clip(event.title, 160)
+      taskDetail = detail
+      operation = undefined
       state = 'waiting'
       title = '等待回复'
       terminal = false
       continue
     }
     if (event.kind === 'thinking' || event.kind === 'text') {
+      if (steps.some((step) => step.status === 'waiting')) continue
       state = 'thinking'
+      operation = undefined
+      detail = taskDetail
       title = clip(event.title, 80)
       terminal = false
       continue
     }
-    if (event.kind === 'tool') {
-      state = 'running'
+    if (event.kind === 'tool' || event.kind === 'approval') {
+      const waiting = event.kind === 'approval'
+      state = waiting ? 'approval' : 'running'
       title = clip(event.title, 80)
-      const step: ActivityStep = { id: `s${++stepSequence}`, label: title, status: 'active' }
-      steps.push(step)
+      operation = event.operation
+      detail = waiting ? event.reason || taskDetail : taskDetail
+      const existing = event.callId ? calls.get(event.callId) : undefined
+      const step: ActivityStep = existing ?? { id: `s${++stepSequence}`, label: title, status: 'active' }
+      step.status = waiting ? 'waiting' : 'active'
+      step.kind = operation?.kind
+      if (!existing) steps.push(step)
+      stepEvents.set(step.id, event)
       if (event.callId) calls.set(event.callId, step)
+      const blocked = steps.find((item) => item.status === 'waiting')
+      if (blocked) {
+        const pending = stepEvents.get(blocked.id)!
+        state = 'approval'
+        title = blocked.label
+        operation = pending.operation
+        detail = pending.reason || taskDetail
+      }
       terminal = false
       continue
     }
@@ -283,7 +315,7 @@ function reduceEvents(events: AgentEvent[]): Omit<SessionView, 'id' | 'agent' | 
       let open = event.callId ? calls.get(event.callId) : undefined
       if (!event.callId) {
         for (let index = steps.length - 1; index >= 0; index -= 1) {
-          if (steps[index].status === 'active') { open = steps[index]; break }
+          if (steps[index].status === 'active' || steps[index].status === 'waiting') { open = steps[index]; break }
         }
       }
       if (open) open.status = event.ok === false ? 'error' : 'done'
@@ -292,8 +324,14 @@ function reduceEvents(events: AgentEvent[]): Omit<SessionView, 'id' | 'agent' | 
         title = '工具执行失败'
         terminal = true
       } else if (state !== 'error') {
-        state = 'running'
-        title = open ? open.label : '正在处理结果'
+        state = steps.some((step) => step.status === 'waiting') ? 'approval' : steps.some((step) => step.status === 'active') ? 'running' : 'thinking'
+        const pending = steps.find((step) => step.status === 'waiting') || steps.find((step) => step.status === 'active')
+        if (pending) {
+          title = pending.label
+          operation = stepEvents.get(pending.id)?.operation
+          detail = state === 'approval' ? stepEvents.get(pending.id)?.reason || taskDetail : taskDetail
+        } else detail = taskDetail
+        if (state === 'thinking') { title = '正在处理结果'; operation = undefined }
         terminal = false
       }
       continue
@@ -301,13 +339,15 @@ function reduceEvents(events: AgentEvent[]): Omit<SessionView, 'id' | 'agent' | 
     if (event.kind === 'done') {
       state = 'success'
       title = event.title && event.title !== '已完成' ? clip(event.title, 80) : title === '等待回复' ? '已完成' : clip(title, 80)
-      for (const step of steps) if (step.status === 'active') step.status = 'done'
+      for (const step of steps) if (step.status === 'active' || step.status === 'waiting') step.status = 'done'
+      operation = undefined
+      detail = taskDetail
       terminal = true
       continue
     }
     state = 'error'
     title = clip(event.title, 80)
-    for (const step of steps) if (step.status === 'active') step.status = 'error'
+    for (const step of steps) if (step.status === 'active' || step.status === 'waiting') step.status = 'error'
     terminal = true
   }
 
@@ -316,6 +356,7 @@ function reduceEvents(events: AgentEvent[]): Omit<SessionView, 'id' | 'agent' | 
     state,
     title,
     detail,
+    operation,
     steps: steps.slice(-4),
     terminal
   }
@@ -324,10 +365,15 @@ function reduceEvents(events: AgentEvent[]): Omit<SessionView, 'id' | 'agent' | 
 function toolTitle(name: string, input: Record<string, unknown>): string {
   const description = textOf(input.description) || textOf(input.summary)
   if (description) return clip(description, 80)
-  const command = textOf(input.command) || textOf(input.cmd)
+  const operation = describeOperation(name, input)
+  if (operation.kind === 'mcp') return clip(`调用 ${operation.name}`, 80)
+  if (operation.kind === 'skill') return clip(`${name.toLowerCase() === 'skill' ? '使用' : '读取'}技能 ${operation.name}`, 80)
+  if (operation.kind === 'agent') return clip(`协作 ${operation.name}`, 80)
+  const command = commandText(input.command) || commandText(input.cmd)
   if (command) return clip(command.replace(/\s+/g, ' '), 80)
   const file = textOf(input.path) || textOf(input.file_path) || textOf(input.filePath) || textOf(input.target_file)
-  const label = TOOL_LABEL[name.toLowerCase()] || name.replace(/[_-]+/g, ' ')
+  const short = name.split(/[.:]/).pop() ?? name
+  const label = TOOL_LABEL[short.toLowerCase()] || short.replace(/[_-]+/g, ' ')
   if (file) return clip(`${label} ${file.split(/[/\\]/).pop()}`, 80)
   const pattern = textOf(input.pattern) || textOf(input.query) || textOf(input.glob_pattern)
   if (pattern) return clip(`${label} ${pattern}`, 80)
@@ -355,9 +401,12 @@ function textOf(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-function joinCommand(value: unknown): string {
-  if (Array.isArray(value)) return value.map(textOf).filter(Boolean).join(' ')
-  return textOf(value)
+function toolEvent(name: string, input: Record<string, unknown>, callId?: string, approval = input.sandbox_permissions === 'require_escalated'): AgentEvent {
+  return {
+    kind: approval ? 'approval' : 'tool', title: toolTitle(name, input), callId,
+    operation: describeOperation(name, input),
+    ...(approval ? { reason: cleanText(textOf(input.justification) || textOf(input.reason)) } : {})
+  }
 }
 
 function hasError(value: unknown): boolean {

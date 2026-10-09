@@ -77,6 +77,12 @@ async function push(
   if ('detail' in args) body.detail = args.detail === 'null' ? null : args.detail
   if ('progress' in args) body.progress = parseProgress(args.progress)
   if ('steps' in args) body.steps = parseSteps(args.steps)
+  if ('kind' in args || 'command' in args) {
+    body.operation = args.kind === 'null' ? null : {
+      kind: args.kind ?? 'command',
+      ...Object.fromEntries(['name', 'command', 'shell', 'cwd'].filter((key) => key in args).map((key) => [key, args[key]]))
+    }
+  }
   const response = await request(io, '/v1/activities', body)
   if (!response.ok) {
     stderr(await readError(response))
@@ -188,11 +194,16 @@ const USAGE = `用法
 push 选项
   --id        活动 id，默认 default
   --agent     显示名称
-  --state     thinking | running | waiting | success | error
+  --state     thinking | running | waiting | approval | success | error
   --title     一行标题
   --detail    补充说明，传 null 可清空
   --progress  0 到 1
   --steps     JSON 数组，例如 [{"id":"edit","label":"修改登录页","status":"active"}]
+  --kind      command | read | edit | search | mcp | skill | agent | tool，null 清空
+  --name      工具、MCP 或 Skill 名称
+  --command   执行的命令（仅展示）
+  --shell     Shell 名称，例如 cmd、PowerShell、Bash
+  --cwd       命令工作目录
 
 环境变量
   CUTE_ISLAND_PORT   默认 17321

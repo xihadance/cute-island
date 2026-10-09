@@ -179,13 +179,13 @@ export class SessionWatcher {
   }
 
   private publish(file: string, view: SessionView): void {
-    const signature = JSON.stringify([view.state, view.title, view.detail ?? '', view.steps])
+    const signature = JSON.stringify([view.state, view.title, view.detail ?? '', view.operation, view.steps])
     const previous = this.tracked.get(file)
     this.tracked.set(file, { signature, id: view.id })
     if (previous?.signature === signature) return
     this.store.upsert({
       id: view.id, agent: view.agent, state: view.state, title: view.title,
-      detail: view.detail ?? null, steps: view.steps
+      detail: view.detail ?? null, operation: view.operation ?? null, steps: view.steps
     })
   }
 

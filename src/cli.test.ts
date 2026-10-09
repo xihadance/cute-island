@@ -10,6 +10,19 @@ afterEach(async () => {
 })
 
 describe('runCli', () => {
+  it('pushes read-only approval and capability metadata through the API', async () => {
+    const store = new ActivityStore(() => ({ cancel() {} }))
+    const server = await startStatusServer(store, { port: 0 })
+    servers.push(server)
+    const io = { env: { CUTE_ISLAND_PORT: String(server.port) }, stdout() {} }
+    expect(await runCli(['push', '--state', 'approval', '--command', 'npm install', '--shell', 'cmd', '--cwd', 'D:\\app'], io)).toBe(0)
+    expect(store.get('default')).toMatchObject({ state: 'approval', operation: { kind: 'command', command: 'npm install', shell: 'cmd', cwd: 'D:\\app' } })
+    expect(await runCli(['push', '--state', 'running', '--kind', 'mcp', '--name', 'context7 / query_docs'], io)).toBe(0)
+    expect(store.get('default')?.operation).toEqual({ kind: 'mcp', name: 'context7 / query_docs' })
+    expect(await runCli(['push', '--state', 'thinking', '--kind', 'null'], io)).toBe(0)
+    expect(store.get('default')?.operation).toBeUndefined()
+  })
+
   it('pushes and ends an activity against the local server', async () => {
     const store = new ActivityStore(() => ({ cancel() {} }))
     const server = await startStatusServer(store, { port: 0, token: 'secret' })

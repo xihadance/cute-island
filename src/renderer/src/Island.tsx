@@ -1,8 +1,9 @@
 import { useEffect, useId, useState } from 'react'
 import { AnimatePresence, motion, type Transition } from 'framer-motion'
-import { STATE_LABEL, expandedHeight, priorityRank, type Activity, type ActivityState } from '../../shared/activity'
+import { expandedHeight, operationHeight, priorityRank, type Activity, type ActivityState } from '../../shared/activity'
 import { agentAppearance } from './agent-appearance'
 import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon } from './agent-icons'
+import { OperationDetails, Status, Steps } from './ActivityDetails'
 
 interface IslandProps {
   activities: Activity[]
@@ -99,6 +100,7 @@ function Compact({ activity }: { activity: Activity }) {
       <span className="compact-title" data-testid="island-title">
         {activity.title}
       </span>
+      <Status activity={activity} compact />
     </div>
   )
 }
@@ -157,21 +159,14 @@ function SessionRow({
           {appearance.short}
         </span>
         <span className="compact-title">{activity.title}</span>
-        <span className={`session-state state-${activity.state}`}>{STATE_LABEL[activity.state]}</span>
+        <Status activity={activity} compact />
       </button>
       {open && (
         <div className="session-detail" onClick={(event) => event.stopPropagation()}>
           {activity.detail && <div className="detail">{activity.detail}</div>}
+          <OperationDetails activity={activity} />
           {typeof activity.progress === 'number' && <Progress value={activity.progress} />}
-          {activity.steps.length > 0 && (
-            <ol className="steps">
-              {activity.steps.slice(-4).map((step) => (
-                <li key={step.id} data-status={step.status}>
-                  {step.label}
-                </li>
-              ))}
-            </ol>
-          )}
+          <Steps activity={activity} />
           {activity.state === 'error' && (
             <button
               type="button"
@@ -192,7 +187,6 @@ function SessionRow({
 
 function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () => void }) {
   const elapsed = useElapsed(activity.startedAt, activity.endedAt)
-  const steps = activity.steps.slice(-4)
   const appearance = agentAppearance(activity.agent)
   return (
     <div className="expanded">
@@ -202,7 +196,7 @@ function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () =
           <div className="agent" style={{ color: appearance.color }}>
             {appearance.label}
           </div>
-          <div className="state-label">{STATE_LABEL[activity.state]}</div>
+          <Status activity={activity} />
         </div>
         <div className="elapsed">{elapsed}</div>
         {activity.state === 'error' && (
@@ -227,16 +221,9 @@ function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () =
           {activity.detail}
         </div>
       )}
+      <OperationDetails activity={activity} />
       {typeof activity.progress === 'number' && <Progress value={activity.progress} />}
-      {steps.length > 0 && (
-        <ol className="steps">
-          {steps.map((step) => (
-            <li key={step.id} data-status={step.status}>
-              {step.label}
-            </li>
-          ))}
-        </ol>
-      )}
+      <Steps activity={activity} />
     </div>
   )
 }
@@ -254,7 +241,7 @@ function orderedSessions(activities: Activity[]): Activity[] {
 function Progress({ value }: { value: number }) {
   const pct = Math.round(value * 100)
   return (
-    <div className="progress">
+    <div className="progress" role="progressbar" aria-label="任务进度" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
       <div className="track">
         <div className="bar" style={{ width: `${pct}%` }} />
       </div>
@@ -295,13 +282,15 @@ function metricsFor(
 }
 
 function stackHeight(activities: Activity[], selectedId: string | null): number {
-  let height = 36 + activities.length * 48
+  let height = 20 + activities.length * 42
   const selected = activities.find((item) => item.id === selectedId)
   if (selected) {
-    height += 16
-    if (selected.detail) height += 32
+    height += 8
+    if (selected.detail) height += 24
+    if (selected.operation) height += operationHeight(selected.operation)
+    if (selected.state === 'approval') height += 70
     if (typeof selected.progress === 'number') height += 28
-    height += Math.min(selected.steps.length, 4) * 26
+    if (selected.steps.length) height += 4 + Math.min(selected.steps.length, 4) * 26
     if (selected.state === 'error') height += 40
   }
   return Math.min(Math.max(height, 56), 520)

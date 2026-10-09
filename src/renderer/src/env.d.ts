@@ -28,6 +28,8 @@ export interface IslandApi {
   simulateError?: () => void
   simulateAgents?: () => void
   simulateSessions?: () => void
+  simulateCapabilities?: () => void
+  simulateApproval?: () => void
   clear?: () => void
 }
 

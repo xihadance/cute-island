@@ -1,12 +1,28 @@
 export const SUCCESS_DWELL_MS = 2800
 
-export type ActivityState = 'thinking' | 'running' | 'waiting' | 'success' | 'error'
-export type StepStatus = 'pending' | 'active' | 'done' | 'error'
+export type ActivityState = 'thinking' | 'running' | 'waiting' | 'approval' | 'success' | 'error'
+export type StepStatus = 'pending' | 'active' | 'waiting' | 'done' | 'error'
+export const OPERATION_KINDS = ['command', 'read', 'edit', 'search', 'mcp', 'skill', 'agent', 'tool'] as const
+export type OperationKind = typeof OPERATION_KINDS[number]
+
+export interface ActivityOperation {
+  kind: OperationKind
+  name?: string
+  command?: string
+  shell?: string
+  cwd?: string
+}
+
+export const OPERATION_LABEL: Record<OperationKind, string> = {
+  command: '命令', read: '读取文件', edit: '修改文件', search: '搜索',
+  mcp: 'MCP 调用', skill: 'Skill', agent: '子 Agent', tool: '工具'
+}
 
 export interface ActivityStep {
   id: string
   label: string
   status: StepStatus
+  kind?: OperationKind
 }
 
 export interface Activity {
@@ -15,6 +31,7 @@ export interface Activity {
   state: ActivityState
   title: string
   detail?: string
+  operation?: ActivityOperation
   progress?: number
   steps: ActivityStep[]
   startedAt: number
@@ -28,6 +45,7 @@ export interface ActivityInput {
   state?: ActivityState
   title?: string
   detail?: string | null
+  operation?: ActivityOperation | null
   progress?: number | null
   steps?: ActivityStep[]
 }
@@ -41,6 +59,7 @@ export const ACTIVITY_STATES: readonly ActivityState[] = [
   'thinking',
   'running',
   'waiting',
+  'approval',
   'success',
   'error'
 ]
@@ -49,12 +68,14 @@ export const STATE_LABEL: Record<ActivityState, string> = {
   thinking: '思考中',
   running: '执行中',
   waiting: '等待中',
+  approval: '需要审批',
   success: '已完成',
   error: '失败'
 }
 
 const PRIORITY: Record<ActivityState, number> = {
   error: 50,
+  approval: 45,
   running: 40,
   thinking: 30,
   waiting: 20,
@@ -63,7 +84,7 @@ const PRIORITY: Record<ActivityState, number> = {
 
 const ID_PATTERN = /^[A-Za-z0-9._:-]{1,80}$/
 const STEP_ID_PATTERN = /^[A-Za-z0-9._:-]{1,40}$/
-const STEP_STATUSES: readonly StepStatus[] = ['pending', 'active', 'done', 'error']
+const STEP_STATUSES: readonly StepStatus[] = ['pending', 'active', 'waiting', 'done', 'error']
 
 export class ActivityError extends Error {
   constructor(
@@ -110,10 +131,17 @@ export function pickPrimary(activities: readonly Activity[]): Activity | undefin
 export function expandedHeight(activity: Activity, otherCount: number): number {
   let height = 112
   if (activity.detail) height += 20
+  if (activity.operation) height += operationHeight(activity.operation)
+  if (activity.state === 'approval') height += 70
   if (typeof activity.progress === 'number') height += 22
   height += Math.min(activity.steps.length, 4) * 22
   if (otherCount > 0) height += 22 + Math.min(otherCount, 3) * 22
-  return Math.min(Math.max(height, 150), 320)
+  return Math.min(Math.max(height, 150), 480)
+}
+
+export function operationHeight(operation: ActivityOperation): number {
+  if (!operation.command) return 44
+  return operation.command.length > 40 || /[\r\n]/.test(operation.command) ? 168 : 108
 }
 
 interface ParsedActivity {
@@ -123,6 +151,7 @@ interface ParsedActivity {
   title?: string
   clearDetail: boolean
   detail?: string
+  operation?: ActivityOperation | null
   clearProgress: boolean
   progress?: number
   steps?: ActivityStep[]
@@ -168,6 +197,7 @@ export class ActivityStore {
       state,
       title: parsed.title ?? current?.title ?? defaultTitle(state),
       detail: resolveDetail(parsed, current),
+      operation: parsed.operation === null ? undefined : parsed.operation ?? (restarting ? undefined : current?.operation),
       progress: resolveProgress(parsed, restarting ? undefined : current),
       steps: parsed.steps ?? (restarting ? [] : current?.steps.map((step) => ({ ...step }))) ?? [],
       startedAt: restarting ? now : current?.startedAt ?? now,
@@ -272,13 +302,14 @@ function resolveProgress(parsed: ParsedActivity, current: Activity | undefined):
 }
 
 function settleStep(step: ActivityStep, result: 'success' | 'error'): ActivityStep {
-  if (step.status !== 'active') return { ...step }
+  if (step.status !== 'active' && step.status !== 'waiting') return { ...step }
   return { ...step, status: result === 'success' ? 'done' : 'error' }
 }
 
 function cloneActivity(activity: Activity): Activity {
   return {
     ...activity,
+    ...(activity.operation ? { operation: { ...activity.operation } } : {}),
     steps: activity.steps.map((step) => ({ ...step }))
   }
 }
@@ -329,6 +360,7 @@ export function parseActivityInput(input: unknown): ParsedActivity {
       parsed.progress = body.progress
     } else throw new ActivityError(400, 'progress 无效')
   }
+  if ('operation' in body) parsed.operation = body.operation === null ? null : parseOperation(body.operation)
   if ('steps' in body && body.steps !== undefined) parsed.steps = parseSteps(body.steps)
   return parsed
 }
@@ -365,7 +397,8 @@ function parseSteps(value: unknown): ActivityStep[] {
     if (!isStepStatus(step.status)) throw new ActivityError(400, `steps[${index}].status 无效`)
     if (seen.has(id)) throw new ActivityError(400, `steps[${index}].id 重复`)
     seen.add(id)
-    return { id, label: clip(step.label, 80), status: step.status }
+    if (step.kind !== undefined && !isOperationKind(step.kind)) throw new ActivityError(400, `steps[${index}].kind 无效`)
+    return { id, label: clip(step.label, 80), status: step.status, ...(step.kind ? { kind: step.kind as OperationKind } : {}) }
   })
 }
 
@@ -375,4 +408,21 @@ function isActivityState(value: unknown): value is ActivityState {
 
 function isStepStatus(value: unknown): value is StepStatus {
   return typeof value === 'string' && (STEP_STATUSES as readonly string[]).includes(value)
+}
+
+function isOperationKind(value: unknown): value is OperationKind {
+  return typeof value === 'string' && (OPERATION_KINDS as readonly string[]).includes(value)
+}
+
+function parseOperation(value: unknown): ActivityOperation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ActivityError(400, 'operation 无效')
+  const body = value as Record<string, unknown>
+  if (!isOperationKind(body.kind)) throw new ActivityError(400, 'operation.kind 无效')
+  const operation: ActivityOperation = { kind: body.kind }
+  for (const key of ['name', 'command', 'shell', 'cwd'] as const) {
+    if (body[key] === undefined) continue
+    if (typeof body[key] !== 'string') throw new ActivityError(400, `operation.${key} 无效`)
+    operation[key] = clip(body[key], key === 'command' ? 4000 : key === 'cwd' ? 400 : 120)
+  }
+  return operation
 }

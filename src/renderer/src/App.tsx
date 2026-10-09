@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import type { Activity } from '../../shared/activity'
+import { STATE_LABEL, type Activity } from '../../shared/activity'
 import { getBridge } from './bridge'
 import { Island } from './Island'
 import type { IslandApi } from './env'
@@ -32,7 +32,7 @@ export function App() {
 
   const primary = activities[0]
   const stacked = activities.length > 1
-  const errorId = activities.find((item) => item.state === 'error')?.id
+  const attentionId = activities.find((item) => item.state === 'error' || item.state === 'approval')?.id
 
   useEffect(() => {
     if (!primary) {
@@ -45,12 +45,12 @@ export function App() {
       return
     }
     setSelectedId(null)
-    if (primary.state === 'error') setExpanded(true)
+    if (primary.state === 'error' || primary.state === 'approval') setExpanded(true)
   }, [primary, stacked])
 
   useEffect(() => {
-    if (stacked && errorId) setSelectedId(errorId)
-  }, [stacked, errorId])
+    if (stacked && attentionId) setSelectedId(attentionId)
+  }, [stacked, attentionId])
 
   useEffect(() => {
     if (primary || pointerNear || expanded) {
@@ -137,7 +137,7 @@ export function App() {
     <>
       <div className="stage" onMouseDown={collapseFromOutside}>
         <div className="sr-only" aria-live="polite">
-          {activities.length > 0 ? activities.map((item) => `${item.agent} ${item.title}`).join('，') : '空闲'}
+          {activities.length > 0 ? activities.map((item) => `${item.agent} ${STATE_LABEL[item.state]} ${item.title}`).join('，') : '空闲'}
         </div>
         <Island
           activities={activities}
@@ -165,6 +165,12 @@ export function App() {
           </button>
           <button type="button" data-testid="simulate-sessions" onClick={() => bridge.simulateSessions?.()}>
             同 agent 多会话
+          </button>
+          <button type="button" data-testid="simulate-capabilities" onClick={() => bridge.simulateCapabilities?.()}>
+            MCP / Skill / 命令
+          </button>
+          <button type="button" data-testid="simulate-approval" onClick={() => bridge.simulateApproval?.()}>
+            需要审批
           </button>
           <button
             type="button"

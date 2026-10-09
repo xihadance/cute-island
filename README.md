@@ -8,6 +8,10 @@ Windows、macOS、Linux 上的 PC 灵动岛。黑胶囊贴在屏幕顶部正中�
 
 闲置时它收成一条细胶囊。有活动时变成紧凑态：左侧是状态图标，右侧是一行标题。点一下展开，能看到 agent 名称、说明、进度、最近步骤和耗时。成功会短暂打勾后收回；失败保持展开，直到被新状态盖掉，或点「关闭」。
 
+执行状态和操作类型使用 SVG 图标：命令终端、文件读写、搜索、MCP、Skill 和子 Agent 协作各有标识。执行中显示轻量动画，遵循系统「减少动态效果」设置。Codex 标识采用官方 VS Code 扩展使用的 OpenAI Blossom 矢量图形。
+
+展开命令可查看命令内容、Shell 和工作目录；长命令支持换行、滚动和选择复制。MCP 显示服务与工具名称，Skill 显示读取或调用的技能名称，子 Agent 显示任务名称。需要审批时自动展开琥珀色提示，提醒到原 Agent 中审批；灵动岛只展示状态，不提供批准或拒绝操作。
+
 ## 开发
 
 需要 Node.js 22.12 或更高版本。
@@ -24,6 +28,7 @@ npm run dev:web
 ```
 
 浏览器打开 http://127.0.0.1:5174 。页面底部可以播放演示、模拟失败或清空。
+还可以点击「MCP / Skill / 命令」查看各种操作，或点击「需要审批」查看审批提示。
 
 ## 把状态推过来
 
@@ -47,9 +52,20 @@ curl -X POST http://127.0.0.1:17321/v1/activities/run-1/end \
   -d '{"result":"success","summary":"登录页已更新"}'
 ```
 
-`state` 可以是 `thinking`、`running`、`waiting`、`success`、`error`。同一个 `id` 再次 POST 会合并更新。`GET /v1/activities` 返回当前活动。`WS /v1/events` 会在每次变化时推送 `{ "type": "activities", "activities": [...] }`。
+`state` 可以是 `thinking`、`running`、`waiting`、`approval`、`success`、`error`。同一个 `id` 再次 POST 会合并更新。`GET /v1/activities` 返回当前活动。`WS /v1/events` 会在每次变化时推送 `{ "type": "activities", "activities": [...] }`。
 
-多个活动同时存在时，按 agent 分组显示会话列表，点击各行查看详情。同一 agent 内按失败、执行、思考、等待、成功排序。
+多个活动同时存在时，按 agent 分组显示会话列表，点击各行查看详情。同一 agent 内按失败、需要审批、执行、思考、等待、成功排序。
+
+可通过 CLI 显式推送操作和审批状态：
+
+```bash
+npm run island -- push --id task-1 --agent Codex --state approval --title "安装依赖" --command "npm install" --shell PowerShell --cwd "D:/projects/app" --detail "需要访问网络"
+npm run island -- push --id task-1 --state running --kind mcp --name "context7 / query_docs" --title "获取组件文档"
+npm run island -- push --id task-1 --state running --kind skill --name frontend-design --title "读取设计技能"
+npm run island -- push --id task-1 --state thinking --kind null --title "整理结果"
+```
+
+HTTP 对应字段为 `operation: { kind, name?, command?, shell?, cwd? }`，`kind` 支持 `command`、`read`、`edit`、`search`、`mcp`、`skill`、`agent`、`tool`。传 `operation: null` 清空；普通更新省略时保留。步骤可带 `kind`，`status: "waiting"` 表示该步骤等待审批。
 
 ## 自动识别本机会话
 
@@ -69,6 +85,8 @@ Windows 上这些目录在 `%USERPROFILE%` 下面，布局相同。可以用 `CL
 扫描使用异步 I/O：已发现的日志约每 800 毫秒检查一次，新文件约每 10 秒发现一次，进程查询间隔 5 秒；内容未变化时不重新读取和解析。JSONL 默认只读末尾 256 KiB，必要时扩展到 4 MiB；Gemini JSON 整份读取，上限 16 MiB。
 
 自动识别依赖各 agent 实际写出的日志。除可关联的 Claude 会话外，进程检测只能证明某种 agent 在运行，无法精确区分该进程下所有会话；缺少结束标记的旧日志仍可能被判断为活动。需要精确状态时可以使用 HTTP/CLI 推送。
+
+操作识别基于工具名称和记录的参数。读取 `SKILL.md` 表示「读取技能」，不代表能证明该技能后续的所有指令都已执行。MCP 支持直接工具调用和 `functions.exec` 中明确写出的静态 MCP 工具名；动态生成的调用名称无法可靠识别。审批识别支持明确的 Codex 审批请求、`sandbox_permissions: "require_escalated"` 请求和 Gemini 的等待审批状态；请求可能被原工具自动放行，后续执行或结果记录会更新状态。没有审批日志的会话不会根据等待时长或自然语言猜测为需要审批，可使用 `approval` 状态显式推送。
 
 ## 窗口
 
@@ -94,11 +112,11 @@ node scripts/smoke-packaged.cjs "release/win-unpacked/Cute Island.exe"
 
 它验证启动前会话恢复、HTTP、preload、展开/关闭、成功自动收起和空闲布局开销，并将截图存入 `release/`。
 
-推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.2`。
+推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.3`。
 
 ```bash
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 ## 图标
