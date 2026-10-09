@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { AnimatePresence, motion, type Transition } from 'framer-motion'
 import { STATE_LABEL, expandedHeight, type Activity, type ActivityState } from '../../shared/activity'
 import { agentAppearance } from './agent-appearance'
+import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon } from './agent-icons'
 
 interface IslandProps {
   activity?: Activity
@@ -179,14 +180,14 @@ function Progress({ value }: { value: number }) {
 
 function AgentBadge({ agent, state }: { agent: string; state: ActivityState }) {
   const appearance = agentAppearance(agent)
+  const gradientId = useId().replace(/:/g, '')
   return (
-    <span
-      className={`agent-badge badge-${state} agent-${appearance.key}`}
-      style={{ background: appearance.color }}
-      title={appearance.label}
-      aria-hidden="true"
-    >
-      {appearance.mark}
+    <span className={`agent-badge badge-${state} agent-${appearance.key}`} title={appearance.label} aria-hidden="true">
+      {appearance.key === 'claude' && <ClaudeIcon />}
+      {appearance.key === 'codex' && <CodexIcon />}
+      {appearance.key === 'gemini' && <GeminiIcon id={gradientId} />}
+      {appearance.key === 'cursor' && <CursorIcon />}
+      {appearance.key === 'custom' && appearance.mark}
     </span>
   )
 }

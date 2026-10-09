@@ -13,7 +13,7 @@ const KNOWN: Array<{ match: (name: string) => boolean; appearance: AgentAppearan
   },
   {
     match: (name) => name.includes('codex'),
-    appearance: { key: 'codex', label: 'Codex', short: 'Codex', mark: 'X', color: '#3dd68c' }
+    appearance: { key: 'codex', label: 'Codex', short: 'Codex', mark: 'X', color: '#f2f2f2' }
   },
   {
     match: (name) => name.includes('gemini'),
@@ -21,7 +21,7 @@ const KNOWN: Array<{ match: (name: string) => boolean; appearance: AgentAppearan
   },
   {
     match: (name) => name.includes('cursor'),
-    appearance: { key: 'cursor', label: 'Cursor', short: 'Cursor', mark: '▶', color: '#d7e4ff' }
+    appearance: { key: 'cursor', label: 'Cursor', short: 'Cursor', mark: '▶', color: '#f5f5f5' }
   }
 ]
 
