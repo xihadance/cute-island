@@ -45,6 +45,19 @@ curl -X POST http://127.0.0.1:17321/v1/activities/run-1/end \
 
 多个活动同时存在时，紧凑态显示优先级最高的一条：失败、执行、思考、等待、成功。展开后能看到其余条数。
 
+## 自动识别本机会话
+
+应用启动后会看这四个 agent 写在本机的会话记录。文件还在更新时，灵动岛显示思考、工具调用或等待；这一轮写完就显示完成，工具失败或回合失败则保持展开。两分钟以前的历史不会被翻出来。
+
+| Agent | 记录位置 |
+| --- | --- |
+| Claude Code | `~/.claude/projects/<项目>/<会话>.jsonl` |
+| Codex | `~/.codex/sessions/年/月/日/rollout-*.jsonl` |
+| Gemini | `~/.gemini/tmp/<项目>/chats/session-*.jsonl` |
+| Cursor | `~/.cursor/projects/<项目>/agent-transcripts/<会话>/<会话>.jsonl` |
+
+Windows 上这些目录在 `%USERPROFILE%` 下面，布局相同。可以用 `CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`GEMINI_CLI_HOME`、`CURSOR_HOME` 改根目录。Claude、Codex、Gemini 以及 `cursor-agent` 进程还在跑时，稍微久一点没写文件也会继续算作这一轮。设置 `CUTE_ISLAND_WATCH=0` 可以关掉自动识别，只保留上面的 HTTP 接口。
+
 ## 窗口
 
 窗口无边框、透明、置顶，不进任务栏，也不抢焦点。只有胶囊本身接收点击，周围的透明区域会把鼠标让给下面的窗口。托盘菜单可以显示、隐藏、播放演示或退出。

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, screen } from 'electron'
 import path from 'node:path'
+import { SessionWatcher } from '../agents/watch'
 import { ActivityStore } from '../shared/activity'
 import { DEMO_ID, demoFrames, playDemoFrames } from '../shared/demo'
 import { startStatusServer, type StatusServer } from './server'
@@ -12,6 +13,7 @@ let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let server: StatusServer | null = null
 let store: ActivityStore | null = null
+let watcher: SessionWatcher | null = null
 let demoToken = 0
 
 if (process.platform === 'linux') {
@@ -62,10 +64,15 @@ async function boot(): Promise<void> {
     return
   }
   console.log(`Cute Island 正在监听 http://127.0.0.1:${server.port}`)
+  if (process.env.CUTE_ISLAND_WATCH !== '0') {
+    watcher = new SessionWatcher(store)
+    watcher.start()
+  }
   mainWindow = createWindow(store)
   tray = createTray()
   wireIpc(store)
   app.on('before-quit', () => {
+    watcher?.stop()
     tray?.destroy()
     store?.dispose()
     void server?.close()
