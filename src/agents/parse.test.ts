@@ -33,6 +33,21 @@ describe('parseTranscript', () => {
     expect(view?.steps.at(-1)).toMatchObject({ label: '补上表单校验', status: 'active' })
   })
 
+  it('uses the Claude Code result summary when a turn finishes', () => {
+    const view = parseTranscript(
+      'claude',
+      'abc',
+      [
+        JSON.stringify({
+          type: 'assistant',
+          message: { content: [{ type: 'tool_use', name: 'Edit', input: { description: '补上表单校验' } }] }
+        }),
+        JSON.stringify({ type: 'result', subtype: 'success', result: '登录页已更新' })
+      ].join('\n')
+    )
+    expect(view).toMatchObject({ state: 'success', title: '登录页已更新', terminal: true })
+  })
+
   it('marks a Claude Code tool failure', () => {
     const view = parseTranscript(
       'claude',

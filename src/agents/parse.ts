@@ -208,11 +208,12 @@ function eventsFromText(raw: string, role: string): AgentEvent[] {
   return [{ kind: 'text', title }]
 }
 
-function endedEvent(status: unknown, error: unknown): AgentEvent {
+function endedEvent(status: unknown, message: unknown): AgentEvent {
+  const title = cleanText(textOf(message))
   if (status === 'error' || status === 'failed') {
-    return { kind: 'error', title: cleanText(textOf(error)) || '执行失败' }
+    return { kind: 'error', title: title || '执行失败' }
   }
-  return { kind: 'done', title: '已完成' }
+  return { kind: 'done', title: title || '已完成' }
 }
 
 function reduceEvents(events: AgentEvent[]): Omit<SessionView, 'id' | 'agent' | 'kind'> {
