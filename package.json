@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "跨平台 PC 灵动岛，展示 agent 执行状态",
+  "author": "Cute Island <xihadance@gmail.com>",
   "license": "MIT",
   "main": "./out/main/index.js",
   "bin": {
@@ -39,7 +40,8 @@
         "AppImage",
         "deb"
       ],
-      "category": "Utility"
+      "category": "Utility",
+      "maintainer": "Cute Island <xihadance@gmail.com>"
     },
     "win": {
       "target": [
