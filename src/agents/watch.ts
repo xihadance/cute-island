@@ -47,6 +47,8 @@ interface CachedSession {
   /** When the stamp last changed. Windows may not bump mtime while a writer holds the file. */
   changedAt: number
   client?: string
+  startedAt?: number
+  endedAt?: number
 }
 
 interface LoadedFile {
@@ -186,9 +188,13 @@ export class SessionWatcher {
         // Retain the last observed host after exit, but let a new binding replace it.
         const remembered = previous?.view?.sessionId === parsed?.sessionId && previous?.client !== previous?.view?.client ? previous?.client : undefined
         const client = registered === null ? parsed?.client : registered ?? remembered ?? parsed?.client
-        this.cache.set(file.path, { stamp, view: parsed, changedAt, client })
+        const sameTurn = previous?.view?.sessionId === parsed?.sessionId && previous?.view?.turn === parsed?.turn
+        const startedAt = parsed?.startedAt ?? (sameTurn ? previous?.startedAt : undefined) ?? now
+        const finished = parsed?.terminal && (parsed.state === 'error' || !parsed.tasks.some((task) => task.status === 'active'))
+        const endedAt = finished ? parsed.endedAt ?? (sameTurn ? previous?.endedAt : undefined) ?? now : undefined
+        this.cache.set(file.path, { stamp, view: parsed, changedAt, client, startedAt, endedAt })
         seen.add(file.path)
-        if (parsed) loaded.push({ file, view: { ...parsed, client }, age: Math.max(0, now - Math.max(info.mtimeMs, changedAt)) })
+        if (parsed) loaded.push({ file, view: { ...parsed, client, startedAt, endedAt }, age: Math.max(0, now - Math.max(info.mtimeMs, changedAt)) })
       } catch {
         // Logs may be rotated, locked or deleted while an agent writes them.
       }
@@ -259,13 +265,14 @@ export class SessionWatcher {
   }
 
   private publish(file: string, view: SessionView): void {
-    const signature = JSON.stringify([view.state, view.title, view.detail ?? '', view.operation, view.steps, view.tasks, view.client])
+    const signature = JSON.stringify([view.state, view.title, view.detail ?? '', view.operation, view.steps, view.tasks, view.client, view.startedAt, view.endedAt])
     const previous = this.tracked.get(file)
     this.tracked.set(file, { signature, id: view.id })
     if (previous?.signature === signature) return
     this.store.upsert({
       id: view.id, agent: view.agent, state: view.state, title: view.title,
       client: view.client ?? null,
+      startedAt: view.startedAt, endedAt: view.endedAt,
       detail: view.detail ?? null, operation: view.operation ?? null, steps: view.steps,
       tasks: view.tasks.length ? view.tasks : null
     })

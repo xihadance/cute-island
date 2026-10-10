@@ -1,6 +1,6 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { cleanText, isRecord, jsonlRows, messageEvents, outputText, parseMaybeRecord, safeId, textOf } from '../events'
+import { cleanText, isRecord, jsonlRows, messageEvents, outputText, parseMaybeRecord, safeId, textOf, timestampEvents } from '../events'
 import type { AgentEvent, AgentPlugin, ChildLink, ParsedTranscript, SessionRegistration } from '../types'
 
 /**
@@ -36,22 +36,22 @@ function createClaudeParser(): (text: string) => ParsedTranscript {
       if (!isRecord(row) || row.isMeta === true) continue
       const notice = notificationEvents(row, owners)
       if (notice) {
-        events.push(...notice)
+        events.push(...timestampEvents(notice, row))
         continue
       }
       if (row.type === 'attachment' || row.type === 'queue-operation') continue
-      const rowEvents = messageEvents(row).filter((event) => !(event.kind === 'user' && /^<system-reminder>/.test(event.title)))
+      const rowEvents = timestampEvents(messageEvents(row).filter((event) => !(event.kind === 'user' && /^<system-reminder>/.test(event.title))), row)
       for (const event of rowEvents) {
         events.push(event)
         if ((event.kind === 'tool' || event.kind === 'approval') && event.callId) {
           titles.set(event.callId, event.title)
           if (event.operation?.kind === 'agent' && isSpawn(row, event.callId)) {
             agentCalls.add(event.callId)
-            events.push({ kind: 'task_start', taskId: safeId(event.callId), task: 'agent', label: event.title })
+            events.push({ kind: 'task_start', taskId: safeId(event.callId), task: 'agent', label: event.title, at: event.at })
           }
         }
       }
-      events.push(...launchEvents(row, titles, agentCalls, owners))
+      events.push(...timestampEvents(launchEvents(row, titles, agentCalls, owners), row))
       for (const event of rowEvents) {
         if (event.kind === 'tool_result' && event.callId) {
           titles.delete(event.callId)

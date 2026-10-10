@@ -3,6 +3,14 @@ import type { AgentEvent, ToolEvent } from './types'
 
 /** Shared row helpers. Plugins handle their native shapes first and fall back to these. */
 
+/** Only native event timestamps count; metadata rows never generate timed events. */
+export function timestampEvents(events: AgentEvent[], row: Record<string, unknown>): AgentEvent[] {
+  const message = isRecord(row.message) ? row.message : {}
+  const raw = row.timestamp ?? message.timestamp
+  const at = typeof raw === 'number' ? raw : typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw) ? Date.parse(raw) : NaN
+  return Number.isFinite(at) && at >= 0 && at <= 8.64e15 ? events.map((event) => ({ ...event, at })) : events
+}
+
 const TOOL_LABEL: Record<string, string> = {
   bash: '运行命令',
   shell: '运行命令',

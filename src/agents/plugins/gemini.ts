@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { cleanText, isRecord, jsonlRows, messageEvents, textOf, toolCallEvents } from '../events'
+import { cleanText, isRecord, jsonlRows, messageEvents, textOf, timestampEvents, toolCallEvents } from '../events'
 import type { AgentEvent, AgentPlugin, ParsedTranscript } from '../types'
 
 /** Gemini CLI: `~/.gemini/tmp/<hash>/chats/session-*.json[l]`, JSON documents or JSONL. */
@@ -43,5 +43,5 @@ function rowEvents(row: unknown): AgentEvent[] {
   if (row.type === 'gemini' && (!Array.isArray(row.toolCalls) || row.toolCalls.length === 0) && events.some((event) => event.kind === 'text')) {
     events.push({ kind: 'done', title: '' })
   }
-  return events
+  return timestampEvents(events, row)
 }

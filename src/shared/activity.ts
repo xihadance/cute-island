@@ -70,6 +70,9 @@ export interface ActivityInput {
   progress?: number | null
   steps?: ActivityStep[]
   tasks?: ActivityTask[] | null
+  /** Unix milliseconds for the latest execution round. Omit to time local updates. */
+  startedAt?: number
+  endedAt?: number
 }
 
 export interface EndInput {
@@ -187,6 +190,8 @@ interface ParsedActivity {
   progress?: number
   steps?: ActivityStep[]
   tasks?: ActivityTask[] | null
+  startedAt?: number
+  endedAt?: number
 }
 
 export class ActivityStore {
@@ -222,7 +227,8 @@ export class ActivityStore {
     const current = this.activities.get(parsed.id)
     const now = this.now()
     const state = parsed.state ?? current?.state ?? 'running'
-    const restarting = current?.endedAt !== undefined && state !== 'success' && state !== 'error'
+    const newRound = parsed.startedAt !== undefined && parsed.startedAt !== current?.startedAt
+    const restarting = newRound || (current?.endedAt !== undefined && state !== 'success' && state !== 'error')
     const next: Activity = {
       id: parsed.id,
       agent: parsed.agent ?? current?.agent ?? 'Agent',
@@ -234,12 +240,13 @@ export class ActivityStore {
       progress: resolveProgress(parsed, restarting ? undefined : current),
       steps: parsed.steps ?? (restarting ? [] : current?.steps.map((step) => ({ ...step }))) ?? [],
       ...resolveTasks(parsed, current),
-      startedAt: restarting ? now : current?.startedAt ?? now,
+      startedAt: parsed.startedAt ?? (restarting ? now : current?.startedAt ?? now),
       updatedAt: now
     }
     const terminal = state === 'success' || state === 'error'
     if (terminal) {
-      next.endedAt = current?.state === state && current.endedAt ? current.endedAt : now
+      next.endedAt = parsed.endedAt ?? (!newRound && current?.state === state && current.endedAt !== undefined ? current.endedAt : now)
+      next.endedAt = Math.max(next.startedAt, next.endedAt)
     }
     this.activities.set(next.id, next)
     this.syncDismissTimer(next)
@@ -409,6 +416,11 @@ export function parseActivityInput(input: unknown): ParsedActivity {
   if ('operation' in body) parsed.operation = body.operation === null ? null : parseOperation(body.operation)
   if ('steps' in body && body.steps !== undefined) parsed.steps = parseSteps(body.steps)
   if ('tasks' in body && body.tasks !== undefined) parsed.tasks = body.tasks === null ? null : parseTasks(body.tasks)
+  for (const key of ['startedAt', 'endedAt'] as const) {
+    if (body[key] === undefined) continue
+    if (typeof body[key] !== 'number' || !Number.isFinite(body[key]) || body[key] < 0 || body[key] > 8.64e15) throw new ActivityError(400, `${key} 必须是有效的毫秒时间戳`)
+    parsed[key] = body[key]
+  }
   return parsed
 }
 

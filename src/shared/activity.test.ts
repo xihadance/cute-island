@@ -21,6 +21,23 @@ function schedulerOf(pending: Array<{ fn: () => void; cancelled: boolean }>) {
 }
 
 describe('ActivityStore', () => {
+  it('preserves recorded execution times across metadata updates and explicitly starts a new round', () => {
+    let now = 100_000
+    const store = new ActivityStore(() => ({ cancel() {} }), () => now)
+    store.upsert({ id: 'timed', state: 'running', startedAt: 10_000 })
+    now += 5000
+    expect(store.upsert({ id: 'timed', client: 'VS Code' }).startedAt).toBe(10_000)
+    expect(store.upsert({ id: 'timed', state: 'success', endedAt: 90_000 })).toMatchObject({ startedAt: 10_000, endedAt: 90_000 })
+    expect(store.upsert({ id: 'timed', title: '更新显示' }).endedAt).toBe(90_000)
+    const next = store.upsert({ id: 'timed', state: 'running', startedAt: 101_000 })
+    expect(next.startedAt).toBe(101_000)
+    expect(next.endedAt).toBeUndefined()
+    for (const value of [-1, Infinity, NaN, 'today', null]) {
+      expect(() => store.upsert({ id: 'timed', startedAt: value })).toThrow('startedAt')
+      expect(() => store.upsert({ id: 'timed', endedAt: value })).toThrow('endedAt')
+    }
+  })
+
   it('validates client labels, preserves them across turns, and supports explicit clearing', () => {
     const store = new ActivityStore(() => ({ cancel() {} }))
     expect(store.upsert({ id: 'client', client: ' VS Code ' }).client).toBe('VS Code')

@@ -5,6 +5,7 @@ import { agentAppearance } from './agent-appearance'
 import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon } from './agent-icons'
 import { OperationDetails, Status, Steps, TaskBadge, Tasks } from './ActivityDetails'
 import { useIslandDrag } from './useIslandDrag'
+import { ExecutionTime } from './ExecutionTime'
 import type { IslandApi } from './env'
 
 interface IslandProps {
@@ -117,7 +118,7 @@ function Compact({ activity }: { activity: Activity }) {
         {activity.title}
       </span>
       <TaskBadge activity={activity} />
-      <Status activity={activity} compact />
+      <span className="session-status"><Status activity={activity} compact /><ExecutionTime activity={activity} compact /></span>
     </div>
   )
 }
@@ -189,7 +190,7 @@ function SessionRow({
         <SessionIdentity activity={activity} />
         <span className="compact-title">{activity.title}</span>
         <TaskBadge activity={activity} />
-        <Status activity={activity} compact />
+        <span className="session-status"><Status activity={activity} compact /><ExecutionTime activity={activity} compact /></span>
       </button>
       {open && (
         <div className="session-detail" onClick={(event) => event.stopPropagation()}>
@@ -217,7 +218,6 @@ function SessionRow({
 }
 
 function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () => void }) {
-  const elapsed = useElapsed(activity.startedAt, activity.endedAt)
   const appearance = agentAppearance(activity.agent)
   return (
     <div className="expanded">
@@ -230,7 +230,7 @@ function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () =
           </div>
           <Status activity={activity} />
         </div>
-        <div className="elapsed">{elapsed}</div>
+        <ExecutionTime activity={activity} />
         {activity.state === 'error' && (
           <button
             type="button"
@@ -328,23 +328,6 @@ function stackHeight(activities: Activity[], selectedId: string | null): number 
     if (selected.state === 'error') height += 40
   }
   return Math.min(Math.max(height, 56), 520)
-}
-
-function useElapsed(startedAt: number, endedAt?: number): string {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (endedAt !== undefined) return
-    const timer = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [endedAt])
-  return formatElapsed((endedAt ?? now) - startedAt)
-}
-
-function formatElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const minutes = Math.floor(total / 60)
-  const seconds = total % 60
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
 function useReducedMotion(): boolean {

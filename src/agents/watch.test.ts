@@ -121,6 +121,47 @@ describe('SessionWatcher', () => {
     expect(store.get('claude-11111111-1111-1111-1111-111111111111')?.updatedAt).toBe(updatedAt)
   })
 
+  it('recovers recorded turn timing and ignores polling and client-only updates', async () => {
+    const { roots } = tempHome()
+    const file = path.join(roots.codex, 'rollout-timed.jsonl')
+    const begin = (timestamp: number) => ({ type: 'event_msg', timestamp: new Date(timestamp).toISOString(), payload: { type: 'task_started' } })
+    writeJsonl(file, [begin(NOW - 600_000)])
+    touch(file, NOW)
+    let now = NOW
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => now, listProcesses: () => new Set(['codex']) })
+    await watcher.scan()
+    expect(store.get('codex-rollout-timed')?.startedAt).toBe(NOW - 600_000)
+    now += 5000
+    await watcher.scan()
+    appendFileSync(file, JSON.stringify({ type: 'session_meta', payload: { originator: 'codex-tui', source: 'cli' } }) + '\n')
+    await watcher.scan()
+    expect(store.get('codex-rollout-timed')).toMatchObject({ client: 'CLI', startedAt: NOW - 600_000 })
+    appendFileSync(file, JSON.stringify(begin(now)) + '\n')
+    await watcher.scan()
+    expect(store.get('codex-rollout-timed')?.startedAt).toBe(now)
+  })
+
+  it('uses first observation for untimed logs without resetting on every append', async () => {
+    const { roots } = tempHome()
+    const file = path.join(roots.claude, 'project', 'untimed.jsonl')
+    const user = { type: 'user', message: { content: '继续' } }
+    writeJsonl(file, [user])
+    touch(file, NOW)
+    let now = NOW
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => now, listProcesses: () => new Set(['claude']) })
+    await watcher.scan()
+    now += 5000
+    appendFileSync(file, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: '检查中' }] } }) + '\n')
+    await watcher.scan()
+    expect(store.get('claude-untimed')?.startedAt).toBe(NOW)
+    now += 5000
+    appendFileSync(file, JSON.stringify(user) + '\n')
+    await watcher.scan()
+    expect(store.get('claude-untimed')?.startedAt).toBe(now)
+  })
+
   it('shows Gemini and Cursor sessions and ignores old history', async () => {
     const home = tempHome()
     const geminiFile = path.join(home.roots.gemini, 'hash', 'chats', 'session-2026-10-09T08-00-abcd1234.jsonl')

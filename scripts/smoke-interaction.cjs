@@ -130,11 +130,18 @@ async function smoke() {
       const result = await send('Page.captureScreenshot', { format: 'png' })
       await fs.writeFile(`output/playwright/${name}.png`, Buffer.from(result.data, 'base64'))
     }
-    await push({ id: 'drag', agent: 'Codex', client: 'Windows Terminal', state: 'running', title: '拖动与透明度验证', operation: { kind: 'command', command: 'npm run typecheck', shell: 'cmd' },
+    const roundStart = Date.now() - 65_000
+    await push({ id: 'drag', agent: 'Codex', client: 'Windows Terminal', startedAt: roundStart, state: 'running', title: '拖动与透明度验证', operation: { kind: 'command', command: 'npm run typecheck', shell: 'cmd' },
       tasks: [{ id: 'child', kind: 'agent', label: '检查代码', status: 'active', detail: '读取组件' },
         { id: 'command', kind: 'command', label: '类型检查', status: 'done' }] })
     assert.equal(await evaluate('document.querySelector(".task-badge").textContent.trim()'), '1')
     assert.equal(await evaluate('document.querySelector(".client-label").textContent'), 'Windows Terminal')
+    const duration = () => evaluate('document.querySelector("[data-testid=execution-duration]").textContent')
+    const initialDuration = await duration()
+    assert.match(initialDuration, /^01:0[5-9]$/, 'Restores the recorded round start')
+    await until(async () => (await duration()) !== initialDuration)
+    await push({ id: 'drag', client: 'Windows Terminal' })
+    assert.match(await duration(), /^01:/, 'Metadata updates do not restart timing')
     await until(async () => (await opacity()) < 0.7)
     await screenshot('drag-translucent')
     const original = pointOf((await getWindow()).bounds)
@@ -185,6 +192,13 @@ async function smoke() {
     assert.equal(await evaluate('document.querySelectorAll(".session-row.open").length'), 0, 'Dragging a session does not select it')
     await click('[data-session=drag] .session-line')
     assert.equal(await evaluate('document.querySelectorAll(".session-row.open").length'), 1)
+    await push({ id: 'second', state: 'error', startedAt: roundStart, endedAt: roundStart + 42_000 })
+    const secondDuration = () => evaluate('document.querySelector("[data-session=second] [data-testid=execution-duration]").textContent')
+    assert.equal(await secondDuration(), '00:42')
+    await delay(1100)
+    assert.equal(await secondDuration(), '00:42', 'Finished execution time stays frozen')
+    await push({ id: 'second', state: 'running', startedAt: Date.now() - 5000 })
+    assert.match(await secondDuration(), /^00:0[5-9]$/, 'A new round restarts execution timing')
     await evaluate('window.island.dismiss("second")')
     await delay(400)
     const { bounds, area } = await getWindow()
@@ -207,7 +221,7 @@ async function smoke() {
     const reset = (await getWindow()).bounds
     assert.equal(reset.x, Math.round(area.x + (area.width - reset.width) / 2))
     assert.equal(reset.y, area.y + 4)
-    console.log(JSON.stringify({ result: 'passed', clientLabels: true, taskDisplay: true, nativeDrag: true, clickVsDrag: true, commandSelection: true, transparency: true, edgeExpansion: true, restartPersistence: true, trayReset: true, rendererErrors: errors }))
+    console.log(JSON.stringify({ result: 'passed', executionTime: true, clientLabels: true, taskDisplay: true, nativeDrag: true, clickVsDrag: true, commandSelection: true, transparency: true, edgeExpansion: true, restartPersistence: true, trayReset: true, rendererErrors: errors }))
   } catch (error) {
     console.error(logs.slice(-2000)); throw error
   } finally {

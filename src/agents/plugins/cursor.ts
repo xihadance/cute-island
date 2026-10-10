@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { endedEvent, isRecord, jsonlRows, messageEvents, textOf, toolEvent, toolTitle } from '../events'
+import { endedEvent, isRecord, jsonlRows, messageEvents, textOf, timestampEvents, toolEvent, toolTitle } from '../events'
 import type { AgentEvent, AgentPlugin, ParsedTranscript } from '../types'
 
 /** Cursor agent: `~/.cursor/projects/<workspace>/agent-transcripts/<id>/<id>.jsonl`. */
@@ -21,9 +21,9 @@ function parseCursor(text: string): ParsedTranscript {
 
 function rowEvents(row: unknown): AgentEvent[] {
   if (!isRecord(row)) return []
-  if (row.type === 'turn_ended') return [endedEvent(row.status, row.error)]
-  if (row.type === 'tool_call') return toolCallRow(row)
-  return messageEvents(row)
+  if (row.type === 'turn_ended') return timestampEvents([endedEvent(row.status, row.error)], row)
+  if (row.type === 'tool_call') return timestampEvents(toolCallRow(row), row)
+  return timestampEvents(messageEvents(row), row)
 }
 
 function toolCallRow(row: Record<string, unknown>): AgentEvent[] {

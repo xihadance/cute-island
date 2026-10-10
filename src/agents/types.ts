@@ -9,6 +9,10 @@ export interface SessionView {
   sessionId?: string
   agent: string
   client?: string
+  /** Latest turn timing from transcript events, independent of watcher updates. */
+  startedAt?: number
+  endedAt?: number
+  turn?: number
   kind: string
   state: ActivityState
   title: string
@@ -24,7 +28,8 @@ export interface SessionView {
 export type ToolEvent = Extract<AgentEvent, { kind: 'tool' | 'approval' }>
 
 /** A normalized transcript event. Plugins translate their native rows into these. */
-export type AgentEvent =
+export type AgentEvent = { at?: number } & (
+  | { kind: 'turn_start' }
   | { kind: 'user'; title: string }
   | { kind: 'thinking' | 'text'; title: string }
   | { kind: 'tool' | 'approval'; title: string; callId?: string; operation?: ActivityOperation; reason?: string }
@@ -36,6 +41,7 @@ export type AgentEvent =
   | { kind: 'task_end'; taskId: string; status: Exclude<TaskStatus, 'active'>; detail?: string }
   /** Forget a task whose outcome the transcript will never record. */
   | { kind: 'task_drop'; taskId: string }
+)
 
 export interface ParsedTranscript {
   events: AgentEvent[]

@@ -30,9 +30,21 @@ export function createReducer() {
   let taskDetail: string | undefined
   let state: ActivityState = 'thinking'
   let terminal = false
+  let turn = 0
+  let startedAt: number | undefined
+  let endedAt: number | undefined
 
   function push(events: readonly AgentEvent[]): void {
     for (const event of events) {
+      if (event.kind === 'user' || event.kind === 'turn_start') {
+        turn += 1
+        startedAt = event.at
+        endedAt = undefined
+      } else if (event.kind !== 'task_drop') {
+        if (!turn) turn = 1
+        startedAt ??= event.at
+      }
+      if (event.kind === 'turn_start') continue
       if (event.kind === 'task_start') {
         const existing = tasks.get(event.taskId)
         tasks.delete(event.taskId)
@@ -60,6 +72,7 @@ export function createReducer() {
           : [tasks.get(event.taskId)].filter((task) => !!task)
         for (const task of targets) {
           if (task.status !== 'active') continue
+          if (terminal && state !== 'error') endedAt = event.at === undefined ? undefined : Math.max(endedAt ?? 0, event.at)
           task.status = event.status
           if (event.detail) task.detail = clip(event.detail, 160)
         }
@@ -86,6 +99,7 @@ export function createReducer() {
         detail = taskDetail
         title = clip(event.title, 80)
         terminal = false
+        endedAt = undefined
         continue
       }
       if (event.kind === 'tool' || event.kind === 'approval') {
@@ -110,6 +124,7 @@ export function createReducer() {
           detail = pending.reason || taskDetail
         }
         terminal = false
+        endedAt = undefined
         continue
       }
       if (event.kind === 'tool_result') {
@@ -125,6 +140,7 @@ export function createReducer() {
           state = 'error'
           title = '工具执行失败'
           terminal = true
+          endedAt ??= event.at
         } else if (state !== 'error') {
           state = steps.some((step) => step.status === 'waiting') ? 'approval' : steps.some((step) => step.status === 'active') ? 'running' : 'thinking'
           const pending = steps.find((step) => step.status === 'waiting') || steps.find((step) => step.status === 'active')
@@ -136,6 +152,7 @@ export function createReducer() {
           } else detail = taskDetail
           if (state === 'thinking') { title = '正在处理结果'; operation = undefined }
           terminal = false
+          endedAt = undefined
         }
         continue
       }
@@ -146,12 +163,14 @@ export function createReducer() {
         operation = undefined
         detail = taskDetail
         terminal = true
+        endedAt ??= event.at
         continue
       }
       state = 'error'
       title = clip(event.title, 80)
       for (const step of steps) if (step.status === 'active' || step.status === 'waiting') step.status = 'error'
       terminal = true
+      endedAt ??= event.at
     }
     // Retain unresolved steps, but do not accumulate every completed call in a long turn.
     const recent = new Set(steps.slice(-4))
@@ -173,6 +192,9 @@ export function createReducer() {
       operation,
       steps: steps.slice(-4).map((step) => ({ ...step })),
       tasks: capTasks([...tasks.values()]).map((task) => ({ ...task })),
+      turn,
+      startedAt,
+      endedAt: terminal && (state === 'error' || ![...tasks.values()].some((task) => task.status === 'active')) ? endedAt : undefined,
       terminal
     }
   }
@@ -208,7 +230,8 @@ export function mergeChildTasks<T extends TurnView>(view: T, children: readonly 
     if (status !== 'active') continue
     tasks.push({ id: child.link.taskId, kind: 'agent', label: clip(child.link.label, 80), status, ...(detail ? { detail: clip(detail, 160) } : {}) })
   }
-  return { ...view, tasks: capTasks(tasks) }
+  const ends = [view.endedAt, ...children.map((child) => child.view.endedAt)].filter((at): at is number => at !== undefined)
+  return { ...view, tasks: capTasks(tasks), endedAt: view.terminal && view.state !== 'error' && ends.length ? Math.max(...ends) : view.endedAt }
 }
 
 /**
@@ -219,7 +242,7 @@ export function presentTasks<T extends TurnView>(view: T): T {
   if (view.state !== 'success') return view
   const active = view.tasks.filter((task) => task.status === 'active')
   if (!active.length) return view
-  return { ...view, state: 'running', title: backgroundTitle(active), operation: undefined, terminal: false }
+  return { ...view, state: 'running', title: backgroundTitle(active), operation: undefined, terminal: false, endedAt: undefined }
 }
 
 /** Forget active tasks with no sign of life, e.g. a background job killed without a record. */

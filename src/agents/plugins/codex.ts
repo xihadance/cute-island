@@ -2,7 +2,7 @@ import { open } from 'node:fs/promises'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { commandText } from '../operation'
-import { cleanText, contentEvents, isRecord, jsonlRows, messageEvents, outputText, parseMaybeRecord, safeId, textOf, toolEvent } from '../events'
+import { cleanText, contentEvents, isRecord, jsonlRows, messageEvents, outputText, parseMaybeRecord, safeId, textOf, timestampEvents, toolEvent } from '../events'
 import type { AgentEvent, AgentPlugin, ChildLink, ParsedTranscript } from '../types'
 import { unwrapExec } from '../script-tool'
 export { unwrapExec } from '../script-tool'
@@ -79,15 +79,15 @@ function createCodexParser(): (text: string) => ParsedTranscript {
         const payload = isRecord(row.payload) ? row.payload : {}
         const type = textOf(payload.type)
         if (type === 'task_complete' || type === 'turn_aborted' || type === 'error' || type === 'user_message') settleTurn()
-        events.push(...codexEvent(payload))
+        events.push(...timestampEvents(codexEvent(payload), row))
         continue
       }
       if (row.type === 'response_item') {
-        events.push(...responseItem(isRecord(row.payload) ? row.payload : {}))
+        events.push(...timestampEvents(responseItem(isRecord(row.payload) ? row.payload : {}), row))
         continue
       }
       if (row.type === 'turn_context') continue
-      events.push(...messageEvents(row))
+      events.push(...timestampEvents(messageEvents(row), row))
     }
     return { events, sessionId, client }
   }
@@ -182,7 +182,7 @@ function codexEvent(payload: Record<string, unknown>): AgentEvent[] {
     const title = cleanText(textOf(payload.message) || textOf(payload.text))
     return title ? [{ kind: type === 'agent_reasoning' ? 'thinking' : 'text', title }] : []
   }
-  if (type === 'task_started') return [{ kind: 'thinking', title: '开始执行' }]
+  if (type === 'task_started') return [{ kind: 'turn_start' }, { kind: 'thinking', title: '开始执行' }]
   if (type === 'task_complete') return [{ kind: 'done', title: cleanText(textOf(payload.last_agent_message) || textOf(payload.message)) || '已完成' }]
   if (type === 'turn_aborted') {
     const title = cleanText(textOf(payload.message) || textOf(payload.error))
