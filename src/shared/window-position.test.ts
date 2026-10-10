@@ -5,6 +5,20 @@ describe('window positioning', () => {
   const area = { x: 0, y: 0, width: 1920, height: 1040 }
   const compact = { x: 60, y: 8, width: 340, height: 40 }
 
+  it('normalizes negative zero from fractional animation bounds before native window positioning', () => {
+    const fractional = { x: 8.25, y: 8.25, width: 380.5, height: 400.5 }
+    const positions = [
+      constrainPosition({ x: -1, y: -1 }, fractional, area),
+      dockedPosition({ edge: 'top', x: 198.25, y: 240 }, fractional, area, false),
+      dockedPosition({ edge: 'left', x: 240, y: 208.25 }, fractional, area, false)
+    ]
+    expect(positions).toEqual([{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }])
+    for (const point of positions) {
+      expect(Object.is(point.x, -0)).toBe(false)
+      expect(Object.is(point.y, -0)).toBe(false)
+    }
+  })
+
   it('allows a compact capsule near the bottom, despite transparent window margins', () => {
     expect(constrainPosition({ x: 500, y: 980 }, compact, area)).toEqual({ x: 500, y: 980 })
     expect(constrainPosition({ x: 2000, y: 1500 }, compact, area)).toEqual({ x: 1512, y: 984 })

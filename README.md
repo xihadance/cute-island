@@ -152,11 +152,11 @@ node scripts/smoke-interaction.cjs
 
 它验证实际窗口移动、点击与拖动区分、命令选择、透明度、四边收纳与点击展开、托管模式鼠标穿透与提醒、子任务状态与执行时间、子会话审批、重启恢复和托盘重置，截图保存在 `output/playwright/`。
 
-发布前同步更新 `package.json`、`package-lock.json` 和 `RELEASE_NOTES.md`。推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)，并附上版本说明。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.7`。
+发布前同步更新 `package.json`、`package-lock.json` 和 `RELEASE_NOTES.md`。推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)，并附上版本说明。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.8`。
 
 ```bash
-git tag v0.1.7
-git push origin v0.1.7
+git tag v0.1.8
+git push origin v0.1.8
 ```
 
 ## 图标

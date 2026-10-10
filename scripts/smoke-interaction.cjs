@@ -34,6 +34,19 @@ async function fixture() {
     return buildMenu(template)
   }
   const server = require('node:http').createServer(async (request, response) => {
+    if (request.method === 'POST' && request.url === '/fractional-position') {
+      const win = BrowserWindow.getAllWindows()[0]
+      let error = null
+      try {
+        win.setPosition(win.getBounds().x, 20)
+        ipcMain.emit('island:interaction', { sender: win.webContents }, {
+          expanded: true, x: 40.25, y: screen.getPrimaryDisplay().workArea.y + 8.25, width: 380.5, height: 420.5
+        })
+      } catch (caught) { error = caught.message }
+      response.setHeader('content-type', 'application/json')
+      response.end(JSON.stringify({ error, bounds: win.getBounds() }))
+      return
+    }
     if (request.method === 'POST') {
       if (request.url === '/reset') reset?.()
       else if (request.url === '/mode/managed') modeMenu.find(item => item.label === '托管模式')?.click()
@@ -286,6 +299,13 @@ async function smoke() {
       assert.ok(open.x >= area.x && open.y >= area.y && open.x + open.width <= area.x + area.width + 1 &&
         open.y + open.height <= area.y + area.height + 1, 'Details open inward and stay visible')
       await screenshot(`dock-${edge}-expanded`)
+      if (edge === 'top') {
+        const probe = await (await fetch(`http://127.0.0.1:${fixturePort}/fractional-position`, { method: 'POST' })).json()
+        assert.equal(probe.error, null, 'Fractional edge bounds must not pass -0 to native setPosition')
+        assert.equal(probe.bounds.y, 0)
+        await evaluate('(() => { const r = document.querySelector(".island").getBoundingClientRect(); window.island.setInteraction({ expanded: true, x: r.x, y: r.y, width: r.width, height: r.height }) })()')
+        await delay(100)
+      }
       await click('.expanded-head')
       assert.equal(await mode(), 'docked', 'Clicking the capsule again restores the handle')
       if (edge === 'top') {
@@ -433,7 +453,7 @@ async function smoke() {
     const reset = (await getWindow()).bounds
     assert.equal(reset.x, Math.round(area.x + (area.width - reset.width) / 2))
     assert.equal(reset.y, area.y + 4)
-    console.log(JSON.stringify({ result: 'passed', executionTime: true, clientLabels: true, taskDisplay: true, taskTiming: true, childApproval: true, nativeDrag: true, clickVsDrag: true, commandSelection: true, transparency: true, fourEdgeDocking: true, undocking: true, edgeExpansion: true, keyboard: true, reducedMotion: true, managedPassthrough: true, managedAlerts: true, alertAcknowledgment: true, trayModes: true, modePersistence: true, restartPersistence: true, trayReset: true, rendererErrors: errors }))
+    console.log(JSON.stringify({ result: 'passed', executionTime: true, clientLabels: true, taskDisplay: true, taskTiming: true, childApproval: true, nativeDrag: true, nativeFractionalPosition: true, clickVsDrag: true, commandSelection: true, transparency: true, fourEdgeDocking: true, undocking: true, edgeExpansion: true, keyboard: true, reducedMotion: true, managedPassthrough: true, managedAlerts: true, alertAcknowledgment: true, trayModes: true, modePersistence: true, restartPersistence: true, trayReset: true, rendererErrors: errors }))
   } catch (error) {
     console.error(logs.slice(-2000)); throw error
   } finally {

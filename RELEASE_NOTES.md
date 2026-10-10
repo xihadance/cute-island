@@ -1,4 +1,6 @@
-## v0.1.7
+## v0.1.8
+
+- **修复贴边动画主进程异常**：将窗口坐标中的负零规范为普通零，避免动画产生负零（`-0`）后触发 Electron `setPosition` 参数转换错误，导致主进程弹出异常对话框。
 
 - **历史后台异常不再反复提醒**：父会话开始新一轮时，移除已在上一轮结束的子任务，修复旧子 Agent 的中断状态反复触发「后台任务异常」。仍在运行的跨轮次任务继续跟踪，本轮新发生的失败正常提醒；重新执行同一个子任务时，不会套用上一轮的失败状态。
 
@@ -12,10 +14,10 @@
 
 ### 验证
 
-176 项测试、TypeScript 类型检查和构建通过；真实 Codex 会话回放验证历史子任务异常清理。Windows 原生交互及打包版回归覆盖贴边收纳、鼠标穿透、子任务状态与计时、审批提醒，以及 Claude 续接和异常流程。
+177 项测试、TypeScript 类型检查和构建通过；真实 Codex 会话回放验证历史子任务异常清理。Windows 原生交互及打包版回归覆盖小数坐标经 IPC 更新窗口、贴边收纳、鼠标穿透、子任务状态与计时、审批提醒，以及 Claude 续接和异常流程。
 
 ### 下载
 
-- Windows：`Cute.Island.Setup.0.1.7.exe`
-- macOS（Apple Silicon）：`Cute.Island-0.1.7-arm64.dmg`
+- Windows：`Cute.Island.Setup.0.1.8.exe`
+- macOS（Apple Silicon）：`Cute.Island-0.1.8-arm64.dmg`
 - Linux（x64）：`.AppImage` 或 `.deb`
