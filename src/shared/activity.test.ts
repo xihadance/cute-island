@@ -212,6 +212,46 @@ describe('ActivityStore', () => {
     expect(() => store.upsert({ id: 'bg', tasks: [task, task] })).toThrow(/重复/)
     expect(() => store.upsert({ id: 'bg', tasks: [{ ...task, kind: 'shell' }] })).toThrow(/kind/)
   })
+
+  it('preserves task timing, rejects invalid execution intervals and leaves unknown times absent', () => {
+    const store = new ActivityStore(() => ({ cancel() {} }), () => 999_000)
+    const task = { id: 'agent', kind: 'agent', label: '检查', status: 'done', startedAt: 1000, endedAt: 5000 }
+    expect(store.upsert({ id: 'parent', tasks: [task] }).tasks).toEqual([task])
+    expect(store.upsert({ id: 'parent', title: '更新' }).tasks).toEqual([task])
+    store.get('parent')!.tasks![0].startedAt = 123
+    expect(store.get('parent')!.tasks![0].startedAt).toBe(1000)
+    for (const key of ['startedAt', 'endedAt']) {
+      for (const value of [-1, NaN, Infinity, 8.64e15 + 1, 'today', null]) {
+        expect(() => store.upsert({ id: 'parent', tasks: [{ ...task, [key]: value }] })).toThrow(key)
+      }
+    }
+    expect(() => store.upsert({ id: 'parent', tasks: [{ ...task, endedAt: 999 }] })).toThrow('endedAt')
+    expect(() => store.upsert({ id: 'parent', tasks: [{ ...task, status: 'active' }] })).toThrow('endedAt')
+    expect(() => store.upsert({ id: 'parent', tasks: [{ ...task, state: 'paused' }] })).toThrow('state')
+    expect(store.upsert({ id: 'parent', tasks: [{ ...task, state: 'success' }] }).tasks![0].state).toBe('success')
+    const unknown = { id: 'unknown', kind: 'agent', label: '检查', status: 'done' }
+    expect(store.upsert({ id: 'parent', tasks: [unknown] }).tasks).toEqual([unknown])
+  })
+
+  it('merges task times across partial status updates and resets them only for a new execution', () => {
+    const store = new ActivityStore(() => ({ cancel() {} }), () => 999_000)
+    const task = { id: 'agent', kind: 'agent', label: '检查', status: 'active' }
+    store.upsert({ id: 'parent', tasks: [{ ...task, startedAt: 1000 }] })
+    expect(store.upsert({ id: 'parent', tasks: [{ ...task, detail: '读取文件' }] }).tasks![0].startedAt).toBe(1000)
+    const done = store.upsert({ id: 'parent', tasks: [{ ...task, status: 'done' }] }).tasks![0]
+    expect(done.startedAt).toBe(1000)
+    expect(done.endedAt).toBeUndefined()
+    store.upsert({ id: 'parent', tasks: [{ ...task, status: 'done', endedAt: 5000 }] })
+    expect(store.upsert({ id: 'parent', tasks: [{ ...task, status: 'done', detail: '测试通过' }] }).tasks![0])
+      .toMatchObject({ startedAt: 1000, endedAt: 5000 })
+    const next = store.upsert({ id: 'parent', tasks: [{ ...task, startedAt: 8000 }] }).tasks![0]
+    expect(next.startedAt).toBe(8000)
+    expect(next.endedAt).toBeUndefined()
+    store.upsert({ id: 'parent', tasks: [{ ...task, status: 'done', endedAt: 10_000 }] })
+    const unknown = store.upsert({ id: 'parent', tasks: [task] }).tasks![0]
+    expect(unknown.startedAt).toBeUndefined()
+    expect(unknown.endedAt).toBeUndefined()
+  })
 })
 
 describe('pickPrimary', () => {

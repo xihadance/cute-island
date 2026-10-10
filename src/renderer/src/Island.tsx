@@ -6,10 +6,14 @@ import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon } from './agent-icons'
 import { OperationDetails, Status, Steps, TaskBadge, Tasks } from './ActivityDetails'
 import { useIslandDrag } from './useIslandDrag'
 import { ExecutionTime } from './ExecutionTime'
-import type { IslandApi } from './env'
+import { attentionKind, type IslandMode } from '../../shared/island-behavior'
 
 interface IslandProps {
-  bridge: IslandApi
+  drag: ReturnType<typeof useIslandDrag>
+  behaviorMode: IslandMode
+  passive: boolean
+  attention: boolean
+  onAcknowledge?: (id: string) => void
   hovered: boolean
   onHover: (value: boolean) => void
   activities: Activity[]
@@ -23,22 +27,33 @@ interface IslandProps {
 
 const SPRING: Transition = { type: 'spring', stiffness: 520, damping: 38, mass: 0.72 }
 
-export function Island({ bridge, hovered, onHover, activities, expanded, selectedId, resting, onToggle, onSelect, onDismiss }: IslandProps) {
+export function Island({ drag, behaviorMode, passive, attention, onAcknowledge, hovered, onHover, activities, expanded, selectedId, resting, onToggle, onSelect, onDismiss }: IslandProps) {
   const reduced = useReducedMotion()
-  const drag = useIslandDrag(bridge)
   const [focused, setFocused] = useState(false)
-  const solid = hovered || focused || drag.dragging || expanded || selectedId !== null
+  const collapsed = drag.dock.collapsed && !attention
+  const solid = !passive && (attention || hovered || focused || drag.dragging || (!collapsed && (expanded || selectedId !== null)))
   const activity = activities[0]
   const stacked = activities.length > 1
-  const mode = !activity ? (resting ? 'rest' : 'idle') : stacked ? 'stack' : expanded ? 'expanded' : 'compact'
-  const metrics = metricsFor(mode, activity, activities, selectedId)
-  const contentKey = stacked ? 'stack' : activity ? `${mode}:${activity.agent}:${activity.state}` : mode
+  const mode = collapsed ? 'docked' : !activity ? (resting ? 'rest' : 'idle') : stacked ? 'stack' : expanded ? 'expanded' : 'compact'
+  const vertical = drag.dock.edge === 'left' || drag.dock.edge === 'right'
+  const baseMetrics = mode === 'docked' ? { width: vertical ? 16 : 72, height: vertical ? 72 : 16, radius: 8 } : metricsFor(mode, activity, activities, selectedId)
+  const openActivity = activities.find(item => item.id === selectedId) ?? activity
+  const attentionHeight = attention ? 64 - (openActivity?.state === 'approval' ? 70 : 0) : 0
+  const metrics = { ...baseMetrics, height: Math.min(520, baseMetrics.height + attentionHeight) }
+  const contentKey = collapsed ? 'docked' : stacked ? 'stack' : activity ? `${mode}:${activity.agent}:${activity.state}` : mode
 
   return (
     <motion.div
-      tabIndex={stacked ? -1 : 0}
+      tabIndex={passive || (stacked && !collapsed) ? -1 : 0}
+      inert={passive}
+      role={collapsed ? 'button' : undefined}
       data-testid="island"
       data-mode={mode}
+      data-behavior={behaviorMode}
+      data-passive={passive}
+      data-attention={attention}
+      data-attention-kind={attention && activity ? attentionKind(activity) : undefined}
+      data-dock-edge={drag.dock.edge ?? undefined}
       data-state={activity?.state ?? 'idle'}
       data-agent={activity ? agentAppearance(activity.agent).key : 'idle'}
       data-solid={solid}
@@ -53,9 +68,10 @@ export function Island({ bridge, hovered, onHover, activities, expanded, selecte
         if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false)
       }}
       className={`island ${activity ? `island-${activity.state}` : 'island-idle'}`}
-      aria-expanded={stacked ? selectedId !== null : expanded}
+      aria-expanded={collapsed ? false : stacked ? selectedId !== null : expanded}
+      title={collapsed ? '点击展开灵动岛，拖离边缘取消收纳' : undefined}
       aria-label={
-        stacked
+        collapsed ? '展开灵动岛' : stacked
           ? activities.map((item) => `${item.agent}，${item.client ?? '未知客户端'}，${item.title}`).join('，')
           : activity
             ? `${activity.agent}，${activity.client ?? '未知客户端'}，${activity.title}`
@@ -66,10 +82,12 @@ export function Island({ bridge, hovered, onHover, activities, expanded, selecte
         width: metrics.width,
         height: metrics.height,
         borderRadius: metrics.radius,
-        opacity: solid ? 1 : mode === 'rest' ? 0.35 : 0.64
+        opacity: passive ? (mode === 'rest' ? 0.16 : 0.28) : solid ? 1 : mode === 'rest' ? 0.35 : 0.64
       }}
       transition={{ ...(reduced ? { duration: 0.01 } : SPRING), opacity: { duration: reduced ? 0.01 : 0.18 } }}
       onClick={() => {
+        if (behaviorMode === 'managed') return
+        if (drag.dock.edge) { onToggle(); return }
         if (stacked) {
           onSelect(null)
           return
@@ -77,13 +95,25 @@ export function Island({ bridge, hovered, onHover, activities, expanded, selecte
         onToggle()
       }}
       onKeyDown={(event) => {
-        if (event.target !== event.currentTarget || stacked) return
+        if (passive) return
+        if (attention && event.key === 'Escape') {
+          event.preventDefault()
+          onAcknowledge?.(selectedId ?? activity.id)
+          return
+        }
+        if (event.key === 'Escape' && drag.dock.edge) {
+          event.preventDefault()
+          drag.setDockExpanded(false)
+          event.currentTarget.focus()
+          return
+        }
+        if (event.target !== event.currentTarget || (stacked && !collapsed)) return
         if (event.key !== 'Enter' && event.key !== ' ') return
         event.preventDefault()
         onToggle()
       }}
     >
-      <AnimatePresence initial={false}>
+      {collapsed ? <span className="dock-mark" aria-hidden="true" /> : <AnimatePresence key={`${behaviorMode}:${attention}`} initial={false}>
         <motion.div
           key={contentKey}
           className="island-content"
@@ -98,13 +128,14 @@ export function Island({ bridge, hovered, onHover, activities, expanded, selecte
               selectedId={selectedId}
               onSelect={onSelect}
               onDismiss={onDismiss}
+              onAcknowledge={onAcknowledge}
             />
           )}
-          {mode === 'expanded' && activity && <Expanded activity={activity} onDismiss={() => onDismiss(activity.id)} />}
+          {mode === 'expanded' && activity && <Expanded activity={activity} onDismiss={() => onDismiss(activity.id)} onAcknowledge={onAcknowledge} />}
           {mode === 'compact' && activity && <Compact activity={activity} />}
           {mode === 'idle' && <span className="idle-mark" />}
         </motion.div>
-      </AnimatePresence>
+      </AnimatePresence>}
     </motion.div>
   )
 }
@@ -142,12 +173,14 @@ function SessionStack({
   activities,
   selectedId,
   onSelect,
-  onDismiss
+  onDismiss,
+  onAcknowledge
 }: {
   activities: Activity[]
   selectedId: string | null
   onSelect: (id: string | null) => void
   onDismiss: (id: string) => void
+  onAcknowledge?: (id: string) => void
 }) {
   return (
     <div className="session-stack" data-testid="session-stack">
@@ -158,6 +191,7 @@ function SessionStack({
           open={selectedId === activity.id}
           onSelect={() => onSelect(selectedId === activity.id ? null : activity.id)}
           onDismiss={() => onDismiss(activity.id)}
+          onAcknowledge={onAcknowledge}
         />
       ))}
     </div>
@@ -168,12 +202,14 @@ function SessionRow({
   activity,
   open,
   onSelect,
-  onDismiss
+  onDismiss,
+  onAcknowledge
 }: {
   activity: Activity
   open: boolean
   onSelect: () => void
   onDismiss: () => void
+  onAcknowledge?: (id: string) => void
 }) {
   return (
     <div className={`session-row${open ? ' open' : ''}`} data-testid="session-row" data-session={activity.id} data-state={activity.state}>
@@ -194,12 +230,13 @@ function SessionRow({
       </button>
       {open && (
         <div className="session-detail" onClick={(event) => event.stopPropagation()}>
+          {onAcknowledge && <AttentionNotice activity={activity} onAcknowledge={onAcknowledge} />}
           {activity.detail && <div className="detail">{activity.detail}</div>}
-          <OperationDetails activity={activity} />
+          <OperationDetails activity={activity} showApprovalNotice={!onAcknowledge} />
           {typeof activity.progress === 'number' && <Progress value={activity.progress} />}
           <Steps activity={activity} />
           <Tasks activity={activity} />
-          {activity.state === 'error' && (
+          {activity.state === 'error' && !onAcknowledge && (
             <button
               type="button"
               className="close"
@@ -217,7 +254,7 @@ function SessionRow({
   )
 }
 
-function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () => void }) {
+function Expanded({ activity, onDismiss, onAcknowledge }: { activity: Activity; onDismiss: () => void; onAcknowledge?: (id: string) => void }) {
   const appearance = agentAppearance(activity.agent)
   return (
     <div className="expanded">
@@ -231,7 +268,7 @@ function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () =
           <Status activity={activity} />
         </div>
         <ExecutionTime activity={activity} />
-        {activity.state === 'error' && (
+        {activity.state === 'error' && !onAcknowledge && (
           <button
             type="button"
             className="close"
@@ -245,6 +282,7 @@ function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () =
           </button>
         )}
       </div>
+      {onAcknowledge && <AttentionNotice activity={activity} onAcknowledge={onAcknowledge} />}
       <div className="expanded-title" data-testid="island-title">
         {activity.title}
       </div>
@@ -253,10 +291,24 @@ function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () =
           {activity.detail}
         </div>
       )}
-      <OperationDetails activity={activity} />
+      <OperationDetails activity={activity} showApprovalNotice={!onAcknowledge} />
       {typeof activity.progress === 'number' && <Progress value={activity.progress} />}
       <Steps activity={activity} />
       <Tasks activity={activity} />
+    </div>
+  )
+}
+
+function AttentionNotice({ activity, onAcknowledge }: { activity: Activity; onAcknowledge: (id: string) => void }) {
+  const kind = attentionKind(activity)
+  const label = kind === 'approval' ? '需要审批' : kind === 'input' ? '需要你回复' : kind === 'task-approval' ? '子 Agent 需要审批' : kind === 'task-error' ? '后台任务异常' : '会话异常'
+  return (
+    <div className="managed-notice" data-testid="managed-notice" data-kind={kind}>
+      <div><strong>{label}</strong><span>请在 {activity.agent} 中查看处理</span></div>
+      <button type="button" className="close" data-testid="acknowledge-attention" onClick={(event) => {
+        event.stopPropagation()
+        onAcknowledge(activity.id)
+      }}>知道了</button>
     </div>
   )
 }

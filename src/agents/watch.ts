@@ -80,9 +80,13 @@ export class SessionWatcher {
   private files: SessionFile[] = []
   private running = new Set<string>()
   private liveIds = new Map<string, Set<string>>()
+  /** Explicit idle or exited sessions must not borrow another agent's process. */
+  private inactiveIds = new Map<string, Set<string>>()
+  private sessionPids = new Map<string, Map<string, { pid: number; updatedAt: number }>>()
   private sessionClients = new Map<string, Map<string, string | null>>()
   private lastDiscovery = -Infinity
   private lastProcesses = -Infinity
+  private firstScanAt: number | undefined
   private timer: ReturnType<typeof setTimeout> | undefined
   private pending: Promise<void> | undefined
   private started = false
@@ -136,33 +140,71 @@ export class SessionWatcher {
 
   private async scanOnce(generation: number): Promise<void> {
     const now = this.now()
+    this.firstScanAt ??= now
     if (now - this.lastProcesses >= this.processMs) {
       this.lastProcesses = now
       let processes: ProcessSnapshot['processes'] = []
+      let queried = false
       try {
         if (this.listSnapshot) {
           const snapshot = await this.listSnapshot()
           this.running = snapshot.running
           processes = snapshot.processes
         } else if (this.listProcesses) this.running = await this.listProcesses()
+        queried = true
       } catch {
         // A transient process-query failure is not evidence that an agent exited.
       }
-      const registrations = await Promise.all(this.sources.map(async ({ plugin, root }) => {
-        const clients = new Map<string, string | null>()
-        if (!plugin.registeredSessions) return { kind: plugin.kind, clients, live: plugin.liveSessions ? await plugin.liveSessions(root) : new Set<string>() }
-        const sessions = await plugin.registeredSessions(root)
-        for (const session of sessions) {
-          const process = processes.find((row) => row.pid === session.pid)
-          if (!process || (process.createdAt !== undefined && process.createdAt > session.updatedAt)) continue
-          if (!matchAgentProcesses(process.commandLine || process.name, [plugin]).has(plugin.kind)) continue
-          const client = clientForProcess(session.pid, processes) ?? null
-          clients.set(session.sessionId, clients.has(session.sessionId) && clients.get(session.sessionId) !== client ? null : client)
-        }
-        return { kind: plugin.kind, clients, live: new Set(sessions.filter((session) => session.busy).map((session) => session.sessionId)) }
+      if (queried) await Promise.all(this.sources.map(async ({ plugin, root }) => {
+        try {
+          const clients = new Map<string, string | null>()
+          if (!plugin.registeredSessions) {
+            this.liveIds.set(plugin.kind, plugin.liveSessions ? await plugin.liveSessions(root) : new Set<string>())
+            return
+          }
+          const sessions = await plugin.registeredSessions(root)
+          const live = new Set<string>()
+          const inactive = new Set<string>()
+          const registeredPids = new Set<number>()
+          const pids = this.sessionPids.get(plugin.kind) ?? new Map<string, { pid: number; updatedAt: number }>()
+          const matches = (pid: number, updatedAt?: number): boolean => {
+            const process = processes.find((row) => row.pid === pid)
+            return !!process && !(updatedAt !== undefined && process.createdAt !== undefined && process.createdAt > updatedAt)
+              && matchAgentProcesses(process.commandLine || process.name, [plugin]).has(plugin.kind)
+          }
+          for (const session of sessions) {
+            if (this.listSnapshot && !matches(session.pid, session.updatedAt)) {
+              inactive.add(session.sessionId)
+              continue
+            }
+            registeredPids.add(session.pid)
+            pids.set(session.sessionId, { pid: session.pid, updatedAt: session.updatedAt })
+            if (session.busy) live.add(session.sessionId)
+            else inactive.add(session.sessionId)
+            const process = processes.find((row) => row.pid === session.pid)
+            if (!process || (process.createdAt !== undefined && process.createdAt > session.updatedAt)) continue
+            if (!matchAgentProcesses(process.commandLine || process.name, [plugin]).has(plugin.kind)) continue
+            const client = clientForProcess(session.pid, processes) ?? null
+            clients.set(session.sessionId, clients.has(session.sessionId) && clients.get(session.sessionId) !== client ? null : client)
+          }
+          if (this.listSnapshot) for (const [id, binding] of pids) {
+            if (live.has(id) || inactive.has(id)) continue
+            if (!matches(binding.pid, binding.updatedAt) || registeredPids.has(binding.pid)) {
+              // A validated replacement on the same PID retires its previous session.
+              inactive.add(id)
+            } else {
+              // Missing/partial registry writes cannot invalidate a still-bound process.
+              if (this.liveIds.get(plugin.kind)?.has(id)) live.add(id)
+              if (this.inactiveIds.get(plugin.kind)?.has(id)) inactive.add(id)
+            }
+          }
+          for (const id of live) inactive.delete(id)
+          this.liveIds.set(plugin.kind, live)
+          this.inactiveIds.set(plugin.kind, inactive)
+          this.sessionPids.set(plugin.kind, pids)
+          this.sessionClients.set(plugin.kind, clients)
+        } catch { /* An unreadable registry is not proof that its busy sessions stopped. */ }
       }))
-      this.liveIds = new Map(registrations.map(({ kind, live }) => [kind, live]))
-      this.sessionClients = new Map(registrations.map(({ kind, clients }) => [kind, clients]))
     }
     if (generation !== this.generation) return
     if (now - this.lastDiscovery >= this.discoveryMs) {
@@ -200,7 +242,7 @@ export class SessionWatcher {
       }
     })
     if (generation !== this.generation) return
-    this.present(loaded)
+    this.present(loaded, now)
     for (const file of this.cache.keys()) if (!seen.has(file)) this.cache.delete(file)
     const candidates = new Set(this.files.map((file) => file.path))
     for (const [file, tracked] of this.tracked) {
@@ -215,12 +257,24 @@ export class SessionWatcher {
   }
 
   /** Fold sub-agent transcripts into their parents, then publish top-level sessions. */
-  private present(loaded: readonly LoadedFile[]): void {
+  private present(loaded: readonly LoadedFile[], now: number): void {
+    const continuations = new Map(loaded.flatMap(({ file, view }) => view.continuedInSessionId
+      ? [[activityId(file.plugin.kind, view.sessionId ?? file.sessionId), activityId(file.plugin.kind, view.continuedInSessionId)] as const] : []))
+    const currentParent = (id: string): string => {
+      const visited = new Set<string>()
+      let current = id
+      while (continuations.has(current)) {
+        if (visited.has(current)) return id
+        visited.add(current)
+        current = continuations.get(current)!
+      }
+      return current
+    }
     const children = new Map<string, LoadedFile[]>()
     for (const item of loaded) {
       const { file } = item
       if (!file.link) continue
-      const parent = activityId(file.plugin.kind, file.link.parentSessionId)
+      const parent = currentParent(activityId(file.plugin.kind, file.link.parentSessionId))
       const list = children.get(parent) ?? []
       list.push(item)
       children.set(parent, list)
@@ -251,17 +305,29 @@ export class SessionWatcher {
     for (const item of loaded) {
       const { file } = item
       if (file.link) continue
+      if (item.view.continuedInSessionId) {
+        const tracked = this.tracked.get(file.path)
+        this.store.dismiss(tracked?.id ?? item.view.id)
+        this.tracked.delete(file.path)
+        continue
+      }
       const result = fold(item)
       const known = this.tracked.has(file.path)
-      const presented = presentSession(result.view, result.live || this.running.has(file.plugin.kind), result.age, known)
+      const presented = presentSession(result.view, result.live, result.age, known)
       if (!presented) continue
-      if (presented.terminal && result.age > this.freshMs && !known) continue
+      // Discovery may take longer than the freshness window. Still deliver a
+      // completion written since observation began, without reviving old history.
+      const writtenSinceStart = this.firstScanAt !== undefined && now - result.age > this.firstScanAt
+      if (presented.terminal && result.age > this.freshMs && !known && !writtenSinceStart) continue
       this.publish(file.path, presented)
     }
   }
 
   private isLive(file: SessionFile, age: number): boolean {
-    return age <= this.freshMs || (age <= this.backgroundMs && this.running.has(file.plugin.kind)) || this.hasLiveRegistration(file)
+    if (age <= this.freshMs || this.hasLiveRegistration(file)) return true
+    const inactive = this.inactiveIds.get(file.plugin.kind)
+    if (inactive?.has(file.sessionId) || inactive?.has(file.sessionId.slice(0, 8))) return false
+    return age <= this.backgroundMs && this.running.has(file.plugin.kind)
   }
 
   private publish(file: string, view: SessionView): void {

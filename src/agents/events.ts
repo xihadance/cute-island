@@ -5,10 +5,15 @@ import type { AgentEvent, ToolEvent } from './types'
 
 /** Only native event timestamps count; metadata rows never generate timed events. */
 export function timestampEvents(events: AgentEvent[], row: Record<string, unknown>): AgentEvent[] {
+  const at = eventTimestamp(row)
+  return at === undefined ? events : events.map((event) => ({ ...event, at: event.at ?? at }))
+}
+
+export function eventTimestamp(row: Record<string, unknown>): number | undefined {
   const message = isRecord(row.message) ? row.message : {}
   const raw = row.timestamp ?? message.timestamp
   const at = typeof raw === 'number' ? raw : typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw) ? Date.parse(raw) : NaN
-  return Number.isFinite(at) && at >= 0 && at <= 8.64e15 ? events.map((event) => ({ ...event, at })) : events
+  return Number.isFinite(at) && at >= 0 && at <= 8.64e15 ? at : undefined
 }
 
 const TOOL_LABEL: Record<string, string> = {

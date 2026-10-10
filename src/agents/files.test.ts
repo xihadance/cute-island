@@ -25,6 +25,34 @@ const launch = [
 const done = { type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: '构建在后台继续' }] } }
 
 describe('incremental transcript reader', () => {
+  it('keeps a forked Codex transcript identity and excludes inherited work across reads', async () => {
+    const file = fileFor(jsonl([{ type: 'session_meta', ordinal: 0, payload: {
+      id: 'child', session_id: 'parent', parent_thread_id: 'parent', subagent_history_start_ordinal: 5
+    } }]))
+    const reader = new SessionReader()
+    expect(await reader.read('codex', 'filename', file, statSync(file).size)).toBeNull()
+    appendFileSync(file, jsonl([
+      { type: 'session_meta', ordinal: 1, payload: { id: 'parent', originator: 'codex-tui' } },
+      { type: 'event_msg', ordinal: 2, payload: { type: 'item_completed', item: {
+        type: 'CollabAgentToolCall', tool: 'spawn_agent', status: 'completed', receiver_thread_ids: ['sibling']
+      } } },
+      { type: 'event_msg', ordinal: 3, payload: { type: 'exec_approval_request', call_id: 'old-approval', command: 'old command' } },
+      { type: 'event_msg', ordinal: 4, payload: { type: 'turn_aborted' } }
+    ]))
+    expect(await reader.read('codex', 'filename', file, statSync(file).size)).toBeNull()
+    appendFileSync(file, jsonl([
+      { type: 'event_msg', ordinal: 5, timestamp: '2026-10-10T03:00:00Z', payload: { type: 'task_started' } },
+      { type: 'response_item', ordinal: 6, payload: { type: 'reasoning', summary: [{ text: 'Child is working' }] } }
+    ]))
+    expect(await reader.read('codex', 'filename', file, statSync(file).size)).toMatchObject({
+      id: 'codex-child', sessionId: 'child', client: undefined, state: 'thinking', title: 'Child is working',
+      startedAt: Date.parse('2026-10-10T03:00:00Z'), tasks: [], steps: []
+    })
+    expect(await readSession('codex', 'filename', file, statSync(file).size)).toMatchObject({
+      id: 'codex-child', tasks: [], steps: []
+    })
+  })
+
   it('retains metadata-only client records across appends and clears them on replacement', async () => {
     const file = fileFor(jsonl([{ type: 'session_meta', payload: { id: 'native', originator: 'codex-tui', source: 'cli' } }]))
     const reader = new SessionReader()

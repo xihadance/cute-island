@@ -114,6 +114,39 @@ async function main() {
       Element.prototype.getBoundingClientRect = function() { count++; return original.call(this) };
       setTimeout(() => { Element.prototype.getBoundingClientRect = original; resolve(count) }, 1500);
     })`)
+    if (!baseline) {
+      // Reproduce the native Claude continuation + API failure + local command sequence.
+      const oldSession = path.join(path.dirname(transcript), 'lifecycle-old.jsonl')
+      const nextSession = path.join(path.dirname(transcript), 'lifecycle-new.jsonl')
+      const startedAt = Date.now()
+      const row = (value) => JSON.stringify(value) + '\n'
+      await fs.writeFile(oldSession, row({ type: 'user', timestamp: startedAt, message: { content: '检查生命周期' } }) +
+        row({ type: 'assistant', timestamp: startedAt, message: { content: [{ type: 'thinking', thinking: '检查中' }] } }))
+      await until(async () => (await list()).some((item) => item.id === 'claude-lifecycle-old' && item.state === 'thinking'))
+      const endedAt = Date.now()
+      await fs.appendFile(oldSession, row({ type: 'continued-in', timestamp: endedAt, continuedInSessionId: 'lifecycle-new' }))
+      await fs.writeFile(nextSession, row({ type: 'user', timestamp: startedAt, message: { content: '检查生命周期' } }) +
+        row({ type: 'assistant', timestamp: endedAt, isApiErrorMessage: true, error: 'model_not_found',
+          message: { model: '<synthetic>', stop_reason: 'stop_sequence', content: [{ type: 'text', text: '所选模型不存在或无访问权限' }] } }))
+      await until(async () => {
+        const activities = await list()
+        return !activities.some((item) => item.id === 'claude-lifecycle-old') &&
+          activities.some((item) => item.id === 'claude-lifecycle-new' && item.state === 'error')
+      })
+      await fs.appendFile(nextSession, row({ type: 'user', isMeta: true, uuid: 'local-caveat', promptId: 'local-prompt',
+        message: { content: '<local-command-caveat>Run locally.</local-command-caveat>' } }))
+      await delay(1000)
+      await fs.appendFile(nextSession, row({ type: 'user', parentUuid: 'local-caveat', promptId: 'local-prompt', timestamp: Date.now(),
+        message: { content: '<command-name>/list-agents</command-name>' } }) +
+        row({ type: 'system', subtype: 'local_command', content: '<local-command-stdout>...</local-command-stdout>' }))
+      await delay(1800)
+      const failed = (await list()).find((item) => item.id === 'claude-lifecycle-new')
+      assert.equal(failed?.state, 'error', 'Local commands must not restart a failed Claude turn')
+      assert.equal(failed?.startedAt, startedAt)
+      assert.equal(failed?.endedAt, endedAt, 'Failure timing must stay frozen')
+      await until(() => evaluate('document.body.textContent.includes("所选模型不存在或无访问权限")'))
+      await evaluate('window.island.dismiss("claude-lifecycle-new")')
+    }
     await post('/v1/activities', { id: 'smoke', agent: 'Codex', state: 'running', title: '打包验证', detail: '验证 IPC 和 HTTP', progress: 0.4 })
     await until(() => evaluate('document.querySelector("[data-testid=island]")?.dataset.mode === "compact"'))
     await evaluate('document.querySelector("[data-testid=island]").click()')
@@ -129,7 +162,7 @@ async function main() {
     await until(async () => (await list()).length === 0)
     assert.deepEqual(cdp.errors, [])
     if (!baseline) assert.equal(idleLayoutReads, 0, 'Idle UI should not poll layout')
-    console.log(JSON.stringify({ baseline, recoveredBeforeStartup: recovered, idleLayoutReadsIn1500ms: idleLayoutReads, api: 'passed', preload: 'passed', interactions: 'passed', rendererErrors: cdp.errors }))
+    console.log(JSON.stringify({ baseline, recoveredBeforeStartup: recovered, claudeLifecycle: !baseline, idleLayoutReadsIn1500ms: idleLayoutReads, api: 'passed', preload: 'passed', interactions: 'passed', rendererErrors: cdp.errors }))
   } catch (error) {
     console.error(logs.slice(-3000))
     throw error

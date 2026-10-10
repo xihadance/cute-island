@@ -1,5 +1,6 @@
 import { MAX_VISIBLE_TASKS, OPERATION_LABEL, STATE_LABEL, TASK_STATUS_LABEL, type Activity, type ActivityTask } from '../../shared/activity'
 import { ActivityIcon } from './activity-icons'
+import { TaskExecutionTime } from './TaskExecutionTime'
 
 /** Count of sub-agents and background commands still running, for compact rows. */
 export function TaskBadge({ activity }: { activity: Activity }) {
@@ -18,8 +19,13 @@ export function TaskBadge({ activity }: { activity: Activity }) {
 export function Tasks({ activity }: { activity: Activity }) {
   const tasks = activity.tasks ?? []
   if (!tasks.length) return null
-  // Running work first; the newest settled work fills any remaining rows.
-  const visible = [...tasks.filter((task) => task.status === 'active'), ...tasks.filter((task) => task.status !== 'active').reverse()]
+  // Keep actionable children visible even when there are many running tasks.
+  const visible = [
+    ...tasks.filter(task => task.status === 'active' && task.state === 'approval'),
+    ...tasks.filter(task => task.status === 'error').reverse(),
+    ...tasks.filter(task => task.status === 'active' && task.state !== 'approval'),
+    ...tasks.filter(task => task.status === 'done' || task.status === 'stopped').reverse()
+  ]
     .slice(0, MAX_VISIBLE_TASKS)
   const active = tasks.filter((task) => task.status === 'active').length
   return (
@@ -36,13 +42,20 @@ export function Tasks({ activity }: { activity: Activity }) {
 }
 
 function TaskRow({ task }: { task: ActivityTask }) {
-  const icon = task.status === 'active' ? task.kind : task.status
+  const state = task.status === 'active' ? task.state : undefined
+  const icon = task.status === 'active' ? state ?? task.kind : task.status
   return (
-    <li data-status={task.status} data-kind={task.kind} title={task.detail ? `${task.label}\n${task.detail}` : task.label}>
-      <ActivityIcon kind={icon} animated={task.status === 'active'} />
-      <span className="task-label">{task.label}</span>
-      {task.detail && <span className="task-detail">{task.detail}</span>}
-      <span className="sr-only">{task.kind === 'agent' ? '子 Agent' : '后台命令'}，{TASK_STATUS_LABEL[task.status]}</span>
+    <li data-task={task.id} data-status={task.status} data-state={state} data-kind={task.kind} title={task.detail ? `${task.label}\n${task.detail}` : task.label}>
+      <ActivityIcon kind={icon} animated={task.status === 'active' && state !== 'approval' && state !== 'waiting'} />
+      <span className="task-copy">
+        <span className="task-label">{task.label}</span>
+        {task.detail && <span className="task-detail">{task.detail}</span>}
+      </span>
+      <span className="task-meta">
+        <span className="task-state" data-testid="task-status">{state ? STATE_LABEL[state] : TASK_STATUS_LABEL[task.status]}</span>
+        <TaskExecutionTime task={task} />
+      </span>
+      <span className="sr-only">{task.kind === 'agent' ? '子 Agent' : '后台命令'}</span>
     </li>
   )
 }
@@ -58,11 +71,11 @@ export function Status({ activity, compact = false }: { activity: Activity; comp
   )
 }
 
-export function OperationDetails({ activity }: { activity: Activity }) {
+export function OperationDetails({ activity, showApprovalNotice = true }: { activity: Activity; showApprovalNotice?: boolean }) {
   const operation = activity.operation
   return (
     <>
-      {activity.state === 'approval' && (
+      {activity.state === 'approval' && showApprovalNotice && (
         <div className="approval-notice" data-testid="approval-notice">
           <ActivityIcon kind="approval" />
           <div><strong>需要审批</strong><span>请在 {activity.agent} 中查看并审批</span></div>

@@ -27,13 +27,49 @@ const SPAWNED = new Set(['async_launched', 'teammate_spawned'])
 
 function createClaudeParser(): (text: string) => ParsedTranscript {
   const titles = new Map<string, string>()
+  const starts = new Map<string, number>()
   const agentCalls = new Set<string>()
   /** Background task ids and agent ids, mapped to the tool_use id that started them. */
   const owners = new Map<string, string>()
+  const localCommands = new Map<string, string>()
+  let continuedInSessionId: string | undefined
   return (text) => {
     const events: AgentEvent[] = []
     for (const row of jsonlRows(text)) {
-      if (!isRecord(row) || row.isMeta === true) continue
+      if (!isRecord(row)) continue
+      const message = isRecord(row.message) ? row.message : row
+      const content = outputText(message.content)
+      // A local command's caveat and command can arrive in separate file appends.
+      // Match their native parent/prompt IDs; ordinary slash prompts still start turns.
+      if (row.type === 'user' && row.isMeta === true && /^<local-command-caveat>/.test(content)) {
+        const uuid = textOf(row.uuid)
+        if (uuid) localCommands.set(uuid, textOf(row.promptId))
+        if (localCommands.size > 32) localCommands.delete(localCommands.keys().next().value!)
+      }
+      if (row.isMeta === true) continue
+      if (row.type === 'user' && /^\s*<command-name>/.test(content)) {
+        const parent = textOf(row.parentUuid)
+        const prompt = textOf(row.promptId)
+        const local = localCommands.has(parent) || !!prompt && [...localCommands.values()].includes(prompt)
+        if (local) {
+          for (const [id, value] of localCommands) if (id === parent || !!prompt && value === prompt) localCommands.delete(id)
+          continue
+        }
+      }
+      if (row.type === 'continued-in' && /^[A-Za-z0-9-]{8,}$/.test(textOf(row.continuedInSessionId))) {
+        continuedInSessionId = textOf(row.continuedInSessionId)
+        events.push(...timestampEvents([{ kind: 'done', title: '会话已续接' }], row))
+        continue
+      }
+      if (row.type === 'assistant' && row.isApiErrorMessage === true) {
+        // Synthetic API failures may also say stop_sequence; that is not success.
+        events.push(...timestampEvents([{ kind: 'error', title: cleanText(content) || textOf(row.error) || 'API 请求失败' }], row))
+        continue
+      }
+      if (row.type === 'user' && /^\[Request interrupted by user(?: for tool use)?\]$/.test(content.trim())) {
+        events.push(...timestampEvents([{ kind: 'error', title: '已中断' }], row))
+        continue
+      }
       const notice = notificationEvents(row, owners)
       if (notice) {
         events.push(...timestampEvents(notice, row))
@@ -45,21 +81,23 @@ function createClaudeParser(): (text: string) => ParsedTranscript {
         events.push(event)
         if ((event.kind === 'tool' || event.kind === 'approval') && event.callId) {
           titles.set(event.callId, event.title)
+          if (event.at !== undefined && !starts.has(event.callId)) starts.set(event.callId, event.at)
           if (event.operation?.kind === 'agent' && isSpawn(row, event.callId)) {
             agentCalls.add(event.callId)
             events.push({ kind: 'task_start', taskId: safeId(event.callId), task: 'agent', label: event.title, at: event.at })
           }
         }
       }
-      events.push(...timestampEvents(launchEvents(row, titles, agentCalls, owners), row))
+      events.push(...timestampEvents(launchEvents(row, titles, starts, agentCalls, owners), row))
       for (const event of rowEvents) {
         if (event.kind === 'tool_result' && event.callId) {
           titles.delete(event.callId)
+          starts.delete(event.callId)
           agentCalls.delete(event.callId)
         }
       }
     }
-    return { events }
+    return { events, continuedInSessionId }
   }
 }
 
@@ -72,7 +110,7 @@ function isSpawn(row: Record<string, unknown>, callId: string): boolean {
 }
 
 /** Tool results that launch background work, or finish a foreground sub-agent. */
-function launchEvents(row: Record<string, unknown>, titles: Map<string, string>, agentCalls: Set<string>, owners: Map<string, string>): AgentEvent[] {
+function launchEvents(row: Record<string, unknown>, titles: Map<string, string>, starts: Map<string, number>, agentCalls: Set<string>, owners: Map<string, string>): AgentEvent[] {
   const result = row.toolUseResult
   if (!isRecord(result)) return []
   const message = isRecord(row.message) ? row.message : {}
@@ -84,7 +122,7 @@ function launchEvents(row: Record<string, unknown>, titles: Map<string, string>,
   const background = textOf(result.backgroundTaskId)
   if (background) {
     owners.set(background, taskId)
-    return [{ kind: 'task_start', taskId, task: 'command', label: titles.get(callId) || '后台命令' }]
+    return [{ kind: 'task_start', taskId, task: 'command', label: titles.get(callId) || '后台命令', at: starts.get(callId) }]
   }
   if (!agentCalls.has(callId)) return []
   const agentId = textOf(result.agentId) || textOf(result.agent_id)

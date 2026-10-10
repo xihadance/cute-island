@@ -47,12 +47,14 @@ export function createReducer() {
       if (event.kind === 'turn_start') continue
       if (event.kind === 'task_start') {
         const existing = tasks.get(event.taskId)
+        const taskStartedAt = existing?.status === 'active' ? existing.startedAt ?? event.at : event.at
         tasks.delete(event.taskId)
         tasks.set(event.taskId, {
           id: event.taskId,
           kind: event.task,
           label: clip(event.label, 80),
           status: 'active',
+          ...(taskStartedAt !== undefined ? { startedAt: taskStartedAt } : {}),
           ...(event.detail ? { detail: clip(event.detail, 160) } : existing?.detail ? { detail: existing.detail } : {})
         })
         continue
@@ -74,6 +76,7 @@ export function createReducer() {
           if (task.status !== 'active') continue
           if (terminal && state !== 'error') endedAt = event.at === undefined ? undefined : Math.max(endedAt ?? 0, event.at)
           task.status = event.status
+          if (event.at !== undefined) task.endedAt = Math.max(task.startedAt ?? event.at, event.at)
           if (event.detail) task.detail = clip(event.detail, 160)
         }
         continue
@@ -220,15 +223,27 @@ export function mergeChildTasks<T extends TurnView>(view: T, children: readonly 
     const detail = GENERIC_TITLES.has(childView.title) ? undefined : childView.title
     const existing = tasks.find((task) => task.id === child.link.taskId)
     if (existing) {
+      if (existing.startedAt === undefined && childView.startedAt !== undefined
+        && (existing.endedAt === undefined || childView.startedAt <= existing.endedAt)) {
+        existing.startedAt = childView.startedAt
+      }
+      if (existing.status !== 'active' && status === existing.status && existing.endedAt === undefined && childView.endedAt !== undefined) {
+        existing.endedAt = Math.max(existing.startedAt ?? childView.endedAt, childView.endedAt)
+      }
       // The parent's own completion notice is authoritative once it arrives.
       if (existing.status === 'active') {
-        if (status && status !== 'active') existing.status = status
+        existing.state = childView.state
+        if (status && status !== 'active') {
+          existing.status = status
+          if (childView.endedAt !== undefined) existing.endedAt = Math.max(existing.startedAt ?? childView.endedAt, childView.endedAt)
+        }
         if (detail) existing.detail = clip(detail, 160)
       } else if (!existing.detail && detail) existing.detail = clip(detail, 160)
       continue
     }
     if (status !== 'active') continue
-    tasks.push({ id: child.link.taskId, kind: 'agent', label: clip(child.link.label, 80), status, ...(detail ? { detail: clip(detail, 160) } : {}) })
+    tasks.push({ id: child.link.taskId, kind: 'agent', label: clip(child.link.label, 80), status, state: childView.state,
+      ...(detail ? { detail: clip(detail, 160) } : {}), ...(childView.startedAt !== undefined ? { startedAt: childView.startedAt } : {}) })
   }
   const ends = [view.endedAt, ...children.map((child) => child.view.endedAt)].filter((at): at is number => at !== undefined)
   return { ...view, tasks: capTasks(tasks), endedAt: view.terminal && view.state !== 'error' && ends.length ? Math.max(...ends) : view.endedAt }

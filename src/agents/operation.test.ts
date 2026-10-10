@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { describeOperation } from './operation'
 import { parseTranscript } from './parse'
+import { unwrapExec } from './script-tool'
 
 const transcript = (rows: unknown[]) => rows.map((row) => JSON.stringify(row)).join('\n')
 const call = (id: string, name: string, args: Record<string, unknown>) => ({ type: 'response_item', payload: {
@@ -41,6 +42,31 @@ describe('operation display', () => {
   it('does not infer approval from command descriptions', () => {
     const view = parseTranscript('codex', 'ordinary', transcript([call('one', 'exec_command', { cmd: 'echo approval', description: '需要审批吗' })]))
     expect(view?.state).toBe('running')
+  })
+
+  it('finds approval after earlier tools in the same code-mode batch', () => {
+    const source = `text(await tools.apply_patch('*** Begin Patch'));
+      text(await tools.exec_command({ cmd: 'npm run typecheck' }));
+      text(await tools.exec_command({ cmd: 'node scripts/smoke-interaction.cjs', sandbox_permissions: 'require_escalated', justification: '启动隔离测试' }));`
+    const pending = { type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', call_id: 'batch', input: source } }
+    expect(parseTranscript('codex', 'batch', transcript([pending]))).toMatchObject({
+      state: 'approval', detail: '启动隔离测试', operation: { kind: 'command', command: 'node scripts/smoke-interaction.cjs' }
+    })
+    const yielded = { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'batch', output: 'Script running with cell ID 33' } }
+    expect(parseTranscript('codex', 'batch', transcript([pending, yielded]))?.state).toBe('approval')
+    const finished = { type: 'response_item', payload: { type: 'function_call_output', call_id: 'wait', output: 'Script completed' } }
+    expect(parseTranscript('codex', 'batch', transcript([pending, yielded, call('wait', 'functions.wait', { cell_id: '33' }), finished]))?.state).toBe('thinking')
+  })
+
+  it('prioritizes static parallel approvals and human-input calls without matching strings or dynamic permissions', () => {
+    expect(unwrapExec(`await Promise.allSettled([tools.read_file({path:'a.ts'}), tools.exec_command({cmd:'npm install',sandbox_permissions:'require_escalated'})])`))
+      .toMatchObject({ name: 'exec_command', input: { sandbox_permissions: 'require_escalated' } })
+    expect(unwrapExec(`await tools.read_file({path:'a.ts'}); await tools.request_user_input({questions: []})`))
+      .toMatchObject({ name: 'request_user_input' })
+    expect(unwrapExec(`await tools.read_file({path:'a.ts'}); await tools.exec_command({cmd:'approval text',sandbox_permissions: permission})`))
+      .toMatchObject({ name: 'read_file' })
+    expect(unwrapExec(`await tools.read_file({path:'a.ts'}); const sample = "tools.exec_command({sandbox_permissions:'require_escalated'})"`))
+      .toMatchObject({ name: 'read_file' })
   })
 
   it('keeps explicit approval visible across unrelated parallel tools and reasoning', () => {

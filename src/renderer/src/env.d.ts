@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 
 import type { Activity } from '../../shared/activity'
+import type { DockState } from '../../shared/window-position'
+import type { IslandBehavior, IslandMode } from '../../shared/island-behavior'
 
 export interface PointerSample {
   x: number
@@ -18,6 +20,13 @@ export interface IslandHit {
 }
 
 export interface IslandApi {
+  getBehavior: () => Promise<IslandBehavior>
+  onBehavior: (callback: (behavior: IslandBehavior) => void) => () => void
+  setMode: (mode: IslandMode) => void
+  acknowledge: (id: string) => void
+  getDock?: () => Promise<DockState>
+  onDock?: (callback: (dock: DockState) => void) => () => void
+  setDockExpanded?: (expanded: boolean) => void
   dragWindow?: (phase: 'start' | 'move' | 'end') => void
   setIgnoreMouse: (ignore: boolean) => void
   getActivities: () => Promise<Activity[]>

@@ -1,33 +1,55 @@
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { constrainPosition, DRAG_THRESHOLD, isPoint, positionAfterDrag, type Point } from '../../shared/window-position'
+import { constrainPosition, dockAfterDrag, dockedPosition, DRAG_THRESHOLD, isEdgeDock, isPoint, positionAfterDrag, type DockState, type Point, type WindowPosition } from '../../shared/window-position'
 import type { IslandApi } from './env'
 
 const POSITION_KEY = 'cute-island-position'
 
-function readPreviewPosition(): Point {
+function readPreviewPosition(): WindowPosition {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(POSITION_KEY) ?? 'null')
-    if (isPoint(saved)) return saved
+    if (isPoint(saved)) return { x: saved.x, y: saved.y, ...('dock' in saved && isEdgeDock(saved.dock) ? { dock: saved.dock } : {}) }
   } catch { /* Storage may be unavailable in an embedded preview. */ }
   return { x: 0, y: 0 }
 }
 
-export function useIslandDrag(bridge: IslandApi) {
-  const [offset, setOffset] = useState<Point>(() => bridge.dragWindow ? { x: 0, y: 0 } : readPreviewPosition())
+export function useIslandDrag(bridge: IslandApi, enabled = true, revealDock = false) {
+  const [initial] = useState<WindowPosition>(() => bridge.dragWindow ? { x: 0, y: 0 } : readPreviewPosition())
+  const [offset, setOffset] = useState<Point>(initial)
   const [dragging, setDragging] = useState(false)
-  const preferred = useRef(offset)
+  const [dock, setDock] = useState<DockState>({ edge: initial.dock?.edge ?? null, collapsed: !!initial.dock })
+  const dockRef = useRef(dock)
+  const preferred = useRef(initial)
   const current = useRef(offset)
   const gesture = useRef<{ id: number; start: Point; origin: Point; element: HTMLElement; moved: boolean } | null>(null)
   const suppressClick = useRef(false)
 
   useEffect(() => {
+    let active = true
+    let received = false
+    const stop = bridge.onDock?.((next) => {
+      received = true
+      dockRef.current = next
+      setDock(next)
+    })
+    void bridge.getDock?.().then((next) => {
+      if (active && !received) { dockRef.current = next; setDock(next) }
+    }).catch(console.error)
+    return () => { active = false; stop?.() }
+  }, [bridge])
+
+  useEffect(() => {
+    const previewArea = () => ({ x: 0, y: 0, width: window.innerWidth, height: window.innerHeight })
+    const previewContent = () => {
+      const rect = document.querySelector<HTMLElement>('[data-testid="island"]')?.getBoundingClientRect()
+      return rect ? { x: (window.innerWidth - rect.width) / 2, y: 8, width: rect.width, height: rect.height } : undefined
+    }
     const fitPreview = (position: Point): Point => {
-      const element = document.querySelector<HTMLElement>('[data-testid="island"]')
-      if (!element) return position
-      const rect = element.getBoundingClientRect()
-      return constrainPosition(position,
-        { x: (window.innerWidth - rect.width) / 2, y: 8, width: rect.width, height: rect.height },
-        { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight })
+      const content = previewContent()
+      if (!content) return position
+      const anchor = preferred.current.dock
+      return anchor && !gesture.current
+        ? dockedPosition(anchor, content, previewArea(), dockRef.current.collapsed && !revealDock)
+        : constrainPosition(position, content, previewArea())
     }
     const applyOffset = (position: Point): void => {
       current.current = position
@@ -55,8 +77,14 @@ export function useIslandDrag(bridge: IslandApi) {
       bridge.dragWindow?.('end')
       if (active.element.hasPointerCapture(active.id)) active.element.releasePointerCapture(active.id)
       if (active.moved && !bridge.dragWindow) {
-        preferred.current = current.current
+        const content = previewContent()
+        const anchor = content ? dockAfterDrag(current.current, content, previewArea()) : undefined
+        preferred.current = { ...current.current, ...(anchor ? { dock: anchor } : {}) }
+        const next = { edge: anchor?.edge ?? null, collapsed: !!anchor }
+        dockRef.current = next
+        setDock(next)
         try { localStorage.setItem(POSITION_KEY, JSON.stringify(preferred.current)) } catch { /* Optional preview persistence. */ }
+        applyOffset(fitPreview(preferred.current))
       }
       setDragging(false)
     }
@@ -86,12 +114,19 @@ export function useIslandDrag(bridge: IslandApi) {
       window.removeEventListener('blur', finish)
       window.removeEventListener('resize', fit)
     }
-  }, [bridge])
+  }, [bridge, enabled, revealDock])
 
   return {
-    offset, dragging,
+    offset, dragging, dock,
+    setDockExpanded(expanded: boolean) {
+      if (!dockRef.current.edge) return
+      const next = { ...dockRef.current, collapsed: !expanded }
+      dockRef.current = next
+      setDock(next)
+      bridge.setDockExpanded?.(expanded)
+    },
     onPointerDownCapture(event: ReactPointerEvent<HTMLDivElement>) {
-      if (event.button !== 0 || !event.isPrimary || gesture.current) return
+      if (!enabled || event.button !== 0 || !event.isPrimary || gesture.current) return
       const target = event.target as HTMLElement
       // Keep buttons, command selection and scrollbars available for their own gestures.
       if (target.closest('button:not(.session-line), a, input, textarea, select, .operation-detail, .session-detail')) return

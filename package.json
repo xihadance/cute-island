@@ -1,6 +1,6 @@
 {
   "name": "cute-island",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "跨平台 PC 灵动岛，展示 agent 执行状态",
   "author": "Cute Island <xihadance@gmail.com>",

@@ -35,7 +35,12 @@ export interface ActivityTask {
   kind: TaskKind
   label: string
   status: TaskStatus
+  /** Latest child-session state, when a linked transcript is available. */
+  state?: ActivityState
   detail?: string
+  /** Unix milliseconds from task execution events; unknown times stay omitted. */
+  startedAt?: number
+  endedAt?: number
 }
 
 export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
@@ -169,7 +174,7 @@ export const MAX_VISIBLE_TASKS = 4
 
 export function tasksHeight(tasks: readonly ActivityTask[] | undefined): number {
   if (!tasks?.length) return 0
-  return 26 + Math.min(tasks.length, MAX_VISIBLE_TASKS) * 24
+  return 26 + Math.min(tasks.length, MAX_VISIBLE_TASKS) * 40
 }
 
 export function operationHeight(operation: ActivityOperation): number {
@@ -345,7 +350,25 @@ function resolveProgress(parsed: ParsedActivity, current: Activity | undefined):
 function resolveTasks(parsed: ParsedActivity, current: Activity | undefined): { tasks?: ActivityTask[] } {
   // Background work survives a new turn, so tasks are only replaced explicitly.
   const tasks = parsed.tasks === null ? undefined : parsed.tasks ?? current?.tasks
-  return tasks?.length ? { tasks: tasks.map((task) => ({ ...task })) } : {}
+  if (!tasks?.length) return {}
+  const previous = new Map(current?.tasks?.map((task) => [task.id, task]))
+  return { tasks: tasks.map((task) => {
+    const existing = previous.get(task.id)
+    const next = { ...task }
+    if (!existing) return next
+    const newRound = task.startedAt !== undefined && task.startedAt !== existing.startedAt
+      || task.status === 'active' && existing.status !== 'active'
+    if (!newRound) {
+      if (next.startedAt === undefined && existing.startedAt !== undefined) next.startedAt = existing.startedAt
+      if (task.status !== 'active' && existing.status !== 'active' && next.endedAt === undefined && existing.endedAt !== undefined) {
+        next.endedAt = existing.endedAt
+      }
+    }
+    if (next.startedAt !== undefined && next.endedAt !== undefined && next.endedAt < next.startedAt) {
+      throw new ActivityError(400, `tasks[${task.id}].endedAt 不能早于 startedAt`)
+    }
+    return next
+  }) }
 }
 
 function settleStep(step: ActivityStep, result: 'success' | 'error'): ActivityStep {
@@ -477,9 +500,26 @@ function parseTasks(value: unknown): ActivityTask[] {
     if (typeof task.status !== 'string' || !(TASK_STATUSES as readonly string[]).includes(task.status)) {
       throw new ActivityError(400, `tasks[${index}].status 无效`)
     }
+    if (task.state !== undefined && !isActivityState(task.state)) throw new ActivityError(400, `tasks[${index}].state 无效`)
     if (task.detail !== undefined && typeof task.detail !== 'string') throw new ActivityError(400, `tasks[${index}].detail 无效`)
     const detail = typeof task.detail === 'string' ? clip(task.detail, 160) : ''
-    return { id, kind: task.kind, label: clip(task.label, 80), status: task.status as TaskStatus, ...(detail ? { detail } : {}) }
+    const timing: Pick<ActivityTask, 'startedAt' | 'endedAt'> = {}
+    for (const key of ['startedAt', 'endedAt'] as const) {
+      const at = task[key]
+      if (at === undefined) continue
+      if (typeof at !== 'number' || !Number.isFinite(at) || at < 0 || at > 8.64e15) {
+        throw new ActivityError(400, `tasks[${index}].${key} 必须是有效的毫秒时间戳`)
+      }
+      timing[key] = at
+    }
+    if (timing.startedAt !== undefined && timing.endedAt !== undefined && timing.endedAt < timing.startedAt) {
+      throw new ActivityError(400, `tasks[${index}].endedAt 不能早于 startedAt`)
+    }
+    if (task.status === 'active' && timing.endedAt !== undefined) {
+      throw new ActivityError(400, `tasks[${index}].endedAt 只能用于已结束的任务`)
+    }
+    return { id, kind: task.kind, label: clip(task.label, 80), status: task.status as TaskStatus,
+      ...(task.state ? { state: task.state as ActivityState } : {}), ...(detail ? { detail } : {}), ...timing }
   })
 }
 

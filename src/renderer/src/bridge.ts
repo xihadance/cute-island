@@ -1,6 +1,7 @@
 import { ActivityStore } from '../../shared/activity'
 import { DEMO_ID, demoFrames, playDemoFrames } from '../../shared/demo'
 import type { IslandApi } from './env'
+import { AttentionTracker, isIslandMode, type IslandBehavior, type IslandMode } from '../../shared/island-behavior'
 
 let mock: IslandApi | undefined
 
@@ -12,12 +13,38 @@ export function getBridge(): IslandApi {
 
 function createMockBridge(): IslandApi {
   const store = new ActivityStore()
+  const attention = new AttentionTracker()
+  let mode: IslandMode = 'focus'
+  try {
+    const saved = localStorage.getItem('cute-island-mode')
+    if (isIslandMode(saved)) mode = saved
+  } catch { /* Storage may be unavailable in previews. */ }
+  const behaviorListeners = new Set<(behavior: IslandBehavior) => void>()
+  const behavior = (): IslandBehavior => ({ mode, attentionIds: attention.pendingIds() })
+  const notifyBehavior = (): void => {
+    const next = behavior()
+    for (const listener of behaviorListeners) listener(next)
+  }
   let demoToken = 0
   const listeners = new Set<(activities: ReturnType<ActivityStore['list']>) => void>()
   store.subscribe((activities) => {
+    attention.update(activities)
+    notifyBehavior()
     for (const listener of listeners) listener(activities)
   })
   return {
+    getBehavior: async () => behavior(),
+    onBehavior(callback) {
+      behaviorListeners.add(callback)
+      return () => { behaviorListeners.delete(callback) }
+    },
+    setMode(next) {
+      if (!isIslandMode(next)) return
+      mode = next
+      try { localStorage.setItem('cute-island-mode', mode) } catch { /* Optional preview persistence. */ }
+      notifyBehavior()
+    },
+    acknowledge(id) { attention.acknowledge(id); notifyBehavior() },
     setIgnoreMouse() {},
     getActivities: async () => store.list(),
     dismiss: async (id) => {
@@ -124,13 +151,14 @@ function createMockBridge(): IslandApi {
     simulateTasks() {
       demoToken += 1
       store.clear()
+      const startedAt = Date.now() - 75_000
       store.upsert({ id: 'tasks-codex', agent: 'Codex', state: 'running', title: '2 个子 Agent 进行中', detail: '并行校订 EP04-EP06',
         steps: [{ id: 'spawn', label: '派生子 Agent', kind: 'agent', status: 'done' }, { id: 'wait', label: '等待子 Agent', kind: 'agent', status: 'done' }],
         tasks: [
-          { id: 'dirac', kind: 'agent', label: 'Dirac', status: 'done', detail: 'EP04 已校订' },
-          { id: 'newton', kind: 'agent', label: 'Newton', status: 'active', detail: '读取 EP05 连续性上下文' },
-          { id: 'helmholtz', kind: 'agent', label: 'Helmholtz', status: 'active', detail: '校订 EP06 结尾' },
-          { id: 'cell-3', kind: 'command', label: 'npm test', status: 'error', detail: 'Exit code 1' }
+          { id: 'dirac', kind: 'agent', label: 'Dirac', status: 'done', detail: 'EP04 已校订', startedAt, endedAt: startedAt + 42_000 },
+          { id: 'newton', kind: 'agent', label: 'Newton', status: 'active', state: 'running', detail: '读取 EP05 连续性上下文', startedAt },
+          { id: 'helmholtz', kind: 'agent', label: 'Helmholtz', status: 'active', state: 'thinking', detail: '校订 EP06 结尾', startedAt: startedAt + 25_000 },
+          { id: 'cell-3', kind: 'command', label: 'npm test', status: 'error', detail: 'Exit code 1', startedAt, endedAt: startedAt + 21_000 }
         ] })
       store.upsert({ id: 'tasks-claude', agent: 'Claude Code', state: 'thinking', title: '整理调研结果',
         tasks: [{ id: 'bash-1', kind: 'command', label: '构建项目', status: 'active' }] })

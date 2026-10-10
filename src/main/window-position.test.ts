@@ -21,6 +21,11 @@ describe('position preference', () => {
     saveWindowPosition(file, { x: -460, y: 800 })
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ x: -460, y: 800 })
     expect(readWindowPosition(file)).toEqual({ x: -460, y: 800 })
+    const docked = { x: -460, y: 800, dock: { edge: 'left' as const, x: -240, y: 840 } }
+    saveWindowPosition(file, docked)
+    expect(readWindowPosition(file)).toEqual(docked)
+    writeFileSync(file, '{"x":1,"y":2,"dock":{"edge":"unknown","x":0,"y":0}}')
+    expect(readWindowPosition(file)).toEqual({ x: 1, y: 2 })
     writeFileSync(file, '{broken')
     expect(readWindowPosition(file)).toBeUndefined()
     writeFileSync(file, '{"x":"bad","y":0}')

@@ -206,7 +206,7 @@ describe('SessionWatcher', () => {
     expect(store.list()).toEqual([])
   })
 
-  it.each(['claude', 'codex', 'gemini', 'cursor'] as const)('recovers a quiet %s turn that started before the app', async (kind) => {
+  it.each(['claude', 'codex', 'gemini', 'cursor'] as const)('recovers a quiet %s turn within the bounded process fallback window', async (kind) => {
     const { roots } = tempHome()
     const folder = kind === 'cursor' ? 'project/agent-transcripts' : 'project'
     const name = kind === 'codex' ? 'rollout-active' : kind === 'gemini' ? 'session-active' : 'active'
@@ -221,7 +221,199 @@ describe('SessionWatcher', () => {
     expect(store.list()[0]).toMatchObject({ state: 'running', title: 'npm test' })
     now += 25 * 60 * 60_000
     await watcher.scan()
-    expect(store.list()[0]?.state).toBe('running')
+    expect(store.list()[0]?.state).toBe('error')
+  })
+
+  it('isolates idle and exited sessions from another busy Claude process and freezes interruption timing', async () => {
+    const { roots } = tempHome()
+    for (const id of ['idle', 'exited', 'busy']) {
+      const file = path.join(roots.claude, 'project', `${id}.jsonl`)
+      writeJsonl(file, [{ type: 'assistant', timestamp: new Date(NOW).toISOString(), message: { content: [{ type: 'thinking', thinking: '处理中' }] } }])
+      touch(file, NOW)
+    }
+    let now = NOW
+    let registrations = ['idle', 'exited', 'busy'].map((sessionId, index) => ({ sessionId, pid: index + 11, busy: true, updatedAt: NOW }))
+    const snapshot: ProcessSnapshot = { running: new Set(['claude']), processes: registrations.map(({ pid }) => ({ pid, parentPid: 0, name: 'claude.exe', commandLine: '', createdAt: NOW - 1000 })) }
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => now, processMs: 0,
+      plugins: [{ ...claudePlugin, registeredSessions: async () => registrations }], listProcessSnapshot: () => snapshot })
+    await watcher.scan()
+    expect(store.list().every((activity) => activity.state === 'thinking')).toBe(true)
+    registrations = registrations.filter((session) => session.sessionId !== 'exited').map((session) => ({ ...session, busy: session.sessionId === 'busy' }))
+    snapshot.processes = snapshot.processes.filter((process) => process.pid !== 12)
+    now += 70_000
+    await watcher.scan()
+    expect(store.get('claude-idle')?.state).toBe('error')
+    expect(store.get('claude-exited')?.state).toBe('error')
+    expect(store.get('claude-busy')?.state).toBe('thinking')
+    const endedAt = store.get('claude-idle')?.endedAt
+    now += 26 * 60 * 60_000
+    await watcher.scan()
+    expect(store.get('claude-idle')?.endedAt).toBe(endedAt)
+    expect(store.get('claude-busy')?.state).toBe('thinking')
+  })
+
+  it('does not trust busy registrations bound to recycled or unrelated process IDs', async () => {
+    const { roots } = tempHome()
+    for (const id of ['recycled', 'unrelated']) {
+      const file = path.join(roots.claude, 'project', `${id}.jsonl`)
+      writeJsonl(file, [{ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '处理中' }] } }])
+      touch(file, NOW)
+    }
+    let now = NOW
+    const snapshot: ProcessSnapshot = { running: new Set(['claude']), processes: [
+      { pid: 11, parentPid: 0, name: 'claude.exe', commandLine: '', createdAt: NOW + 1000 },
+      { pid: 12, parentPid: 0, name: 'unrelated.exe', commandLine: '', createdAt: NOW - 1000 }
+    ] }
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => now, processMs: 0, listProcessSnapshot: () => snapshot,
+      plugins: [{ ...claudePlugin, registeredSessions: async () => [
+        { sessionId: 'recycled', pid: 11, busy: true, updatedAt: NOW },
+        { sessionId: 'unrelated', pid: 12, busy: true, updatedAt: NOW }
+      ] }] })
+    await watcher.scan()
+    now += 70_000
+    await watcher.scan()
+    expect(store.list().map((activity) => activity.state)).toEqual(['error', 'error'])
+  })
+
+  it('preserves validated busy sessions through transient process or registry query failures', async () => {
+    const { roots } = tempHome()
+    const file = path.join(roots.claude, 'project', 'busy.jsonl')
+    writeJsonl(file, [{ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '处理中' }] } }])
+    touch(file, NOW)
+    let now = NOW
+    let processFailure = false
+    let registryFailure = false
+    const snapshot: ProcessSnapshot = { running: new Set(['claude']), processes: [{ pid: 11, parentPid: 0, name: 'claude.exe', commandLine: '', createdAt: NOW - 1000 }] }
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => now, processMs: 0,
+      listProcessSnapshot: () => { if (processFailure) throw new Error('query failed'); return snapshot },
+      plugins: [{ ...claudePlugin, registeredSessions: async () => {
+        if (registryFailure) throw new Error('temporarily unavailable')
+        return [{ sessionId: 'busy', pid: 11, busy: true, updatedAt: NOW }]
+      } }] })
+    await watcher.scan()
+    now += 2 * 60 * 60_000
+    processFailure = true
+    await watcher.scan()
+    expect(store.get('claude-busy')?.state).toBe('thinking')
+    processFailure = false
+    registryFailure = true
+    await watcher.scan()
+    expect(store.get('claude-busy')?.state).toBe('thinking')
+  })
+
+  it('retires a continued Claude session even before its replacement transcript is available', async () => {
+    const { roots } = tempHome()
+    const old = path.join(roots.claude, 'project', 'old-session.jsonl')
+    writeJsonl(old, [{ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '压缩前思考' }] } }])
+    touch(old, NOW)
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => NOW, discoveryMs: 0, listProcesses: () => new Set(['claude']) })
+    await watcher.scan()
+    expect(store.get('claude-old-session')?.state).toBe('thinking')
+    appendFileSync(old, JSON.stringify({ type: 'continued-in', sessionId: 'old-session', continuedInSessionId: 'new-session', timestamp: new Date(NOW).toISOString() }) + '\n')
+    await watcher.scan()
+    expect(store.get('claude-old-session')).toBeUndefined()
+    const next = path.join(roots.claude, 'project', 'new-session.jsonl')
+    writeJsonl(next, [{ type: 'result', is_error: true, result: '请求失败' }])
+    touch(next, NOW)
+    await watcher.scan()
+    expect(store.list()).toMatchObject([{ id: 'claude-new-session', state: 'error' }])
+  })
+
+  it('keeps validated busy state through a real partial registry write, then recognizes idle', async () => {
+    const { roots } = tempHome()
+    const id = 'partial-registry-session'
+    const file = path.join(roots.claude, 'project', `${id}.jsonl`)
+    writeJsonl(file, [{ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '处理中' }] } }])
+    touch(file, NOW)
+    const registry = path.join(roots.claude, '..', 'sessions', `${process.pid}.json`)
+    mkdirSync(path.dirname(registry), { recursive: true })
+    writeFileSync(registry, JSON.stringify({ pid: process.pid, sessionId: id, status: 'busy' }))
+    let now = NOW
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => now, processMs: 0, plugins: [claudePlugin],
+      listProcessSnapshot: () => ({ running: new Set(['claude']), processes: [
+        { pid: process.pid, parentPid: 0, name: 'claude.exe', commandLine: '' }
+      ] }) })
+    await watcher.scan()
+    now += 2 * 60 * 60_000
+    writeFileSync(registry, '{"pid":')
+    await watcher.scan()
+    expect(store.get(`claude-${id}`)?.state).toBe('thinking')
+    writeFileSync(registry, JSON.stringify({ pid: process.pid, sessionId: id, status: 'idle' }))
+    await watcher.scan()
+    expect(store.get(`claude-${id}`)?.state).toBe('error')
+    writeFileSync(registry, '{"pid":')
+    await watcher.scan()
+    expect(store.get(`claude-${id}`)?.state).toBe('error')
+  })
+
+  it('retires a previous session when the same Claude process registers a different session', async () => {
+    const { roots } = tempHome()
+    for (const id of ['previous', 'replacement']) {
+      const file = path.join(roots.claude, 'project', `${id}.jsonl`)
+      writeJsonl(file, [{ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '处理中' }] } }])
+      touch(file, NOW)
+    }
+    let now = NOW
+    let registrations = [{ sessionId: 'previous', pid: 11, busy: true, updatedAt: NOW }]
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => now, processMs: 0,
+      plugins: [{ ...claudePlugin, registeredSessions: async () => registrations }],
+      listProcessSnapshot: () => ({ running: new Set(['claude']), processes: [
+        { pid: 11, parentPid: 0, name: 'claude.exe', commandLine: '', createdAt: NOW - 1000 }
+      ] }) })
+    await watcher.scan()
+    now += 70_000
+    registrations = [{ sessionId: 'replacement', pid: 11, busy: true, updatedAt: now }]
+    await watcher.scan()
+    expect(store.get('claude-previous')?.state).toBe('error')
+    expect(store.get('claude-replacement')?.state).toBe('thinking')
+    registrations = []
+    await watcher.scan()
+    expect(store.get('claude-previous')?.state).toBe('error')
+    expect(store.get('claude-replacement')?.state).toBe('thinking')
+  })
+
+  it('follows native continuation chains when merging child state and execution time', async () => {
+    const { roots } = tempHome()
+    const folder = path.join(roots.claude, 'project')
+    const old = path.join(folder, 'old-session.jsonl')
+    const middle = path.join(folder, 'middle-session.jsonl')
+    const next = path.join(folder, 'new-session.jsonl')
+    const child = path.join(folder, 'old-session', 'subagents', 'agent-a1.jsonl')
+    const launch = [
+      { type: 'assistant', timestamp: NOW - 5000, message: { content: [{ type: 'tool_use', id: 'call-1', name: 'Agent', input: { description: '调研', run_in_background: true } }] } },
+      { type: 'user', toolUseResult: { status: 'async_launched', agentId: 'a1' }, message: { content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'launched' }] } }
+    ]
+    writeJsonl(old, [...launch, { type: 'continued-in', continuedInSessionId: 'middle-session' }])
+    writeJsonl(middle, [{ type: 'continued-in', continuedInSessionId: 'new-session' }])
+    writeJsonl(next, [...launch, { type: 'assistant', timestamp: NOW, message: { stop_reason: 'end_turn', content: [{ type: 'text', text: '等待后台任务' }] } }])
+    writeJsonl(child, [{ type: 'assistant', timestamp: NOW - 4000, message: { content: [{ type: 'thinking', thinking: '子任务思考中' }] } }])
+    writeFileSync(child.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ toolUseId: 'call-1', description: '调研' }))
+    for (const file of [old, middle, next, child]) touch(file, NOW)
+    let now = NOW
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => now, listProcesses: () => new Set(['claude']) })
+    await watcher.scan()
+    expect(store.list()).toHaveLength(1)
+    expect(store.list()[0]).toMatchObject({ id: 'claude-new-session', state: 'running', tasks: [
+      { id: 'call-1', status: 'active', state: 'thinking', startedAt: NOW - 5000, detail: '子任务思考中' }
+    ] })
+    now += 4000
+    appendFileSync(child, JSON.stringify({ type: 'assistant', timestamp: now, isApiErrorMessage: true,
+      message: { stop_reason: 'stop_sequence', content: [{ type: 'text', text: '子任务请求失败' }] } }) + '\n')
+    await watcher.scan()
+    expect(store.list()).toHaveLength(1)
+    expect(store.list()[0].tasks).toMatchObject([
+      { id: 'call-1', status: 'error', state: 'error', startedAt: NOW - 5000, endedAt: now, detail: '子任务请求失败' }
+    ])
+    now += 4000
+    await watcher.scan()
+    expect(store.list()[0].tasks?.[0].endedAt).toBe(NOW + 4000)
   })
 
   it('never revives completed historical turns just because an agent process exists', async () => {
@@ -232,6 +424,26 @@ describe('SessionWatcher', () => {
     const store = newStore()
     await watcherFor(store, roots, () => new Set(['claude'])).scan()
     expect(store.list()).toEqual([])
+  })
+
+  it('discovers new terminal records after the freshness window without reviving historical completions', async () => {
+    const { roots } = tempHome()
+    let now = NOW
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => now, discoveryMs: 10_000, listProcesses: () => new Set(['claude']) })
+    await watcher.scan()
+    expect(store.list()).toEqual([])
+    now += 100
+    const latest = path.join(roots.claude, 'project', 'latest.jsonl')
+    writeJsonl(latest, [{ type: 'assistant', timestamp: now, isApiErrorMessage: true,
+      message: { stop_reason: 'stop_sequence', content: [{ type: 'text', text: '模型请求失败' }] } }])
+    touch(latest, now)
+    const historical = path.join(roots.claude, 'project', 'historical.jsonl')
+    writeJsonl(historical, [{ type: 'result', subtype: 'success', result: '旧任务已完成' }])
+    touch(historical, NOW - 10_000)
+    now = NOW + 10_000
+    await watcher.scan()
+    expect(store.list()).toMatchObject([{ id: 'claude-latest', state: 'error', title: '模型请求失败', endedAt: NOW + 100 }])
   })
 
   it('recovers registered busy Claude sessions beyond the fallback history window', async () => {
@@ -344,7 +556,7 @@ describe('SessionWatcher', () => {
     await watcherFor(store, roots, () => new Set(['claude'])).scan()
     expect(store.list()).toHaveLength(1)
     expect(store.list()[0]).toMatchObject({ id: `claude-${session}`, state: 'running', title: '子 Agent 调研 进行中' })
-    expect(store.list()[0].tasks).toEqual([{ id: 'call-1', kind: 'agent', label: '调研', status: 'active', detail: '搜索网页 mcp servers' }])
+    expect(store.list()[0].tasks).toEqual([{ id: 'call-1', kind: 'agent', label: '调研', status: 'active', state: 'running', detail: '搜索网页 mcp servers', startedAt: NOW }])
   })
 
   it('links Codex sub-agent rollouts through session_meta and ends the parent with them', async () => {
@@ -373,6 +585,48 @@ describe('SessionWatcher', () => {
     await watcher.scan()
     expect(store.list()[0]).toMatchObject({ state: 'success', title: '等待子代理' })
     expect(store.list()[0].tasks?.[0]).toMatchObject({ status: 'done', detail: 'EP06 完成' })
+  })
+
+  it('folds forked Codex histories into one root while retaining each child identity and state', async () => {
+    const { roots } = tempHome()
+    const ids = ['11111111-aaaa-1111-1111-111111111111', '22222222-bbbb-2222-2222-222222222222', '33333333-cccc-3333-3333-333333333333']
+    const files = ids.map((id) => path.join(roots.codex, `rollout-${id}.jsonl`))
+    const parentMeta = { type: 'session_meta', ordinal: 1, payload: { id: ids[0] } }
+    writeJsonl(files[0], [parentMeta,
+      { type: 'event_msg', payload: { type: 'item_completed', item: {
+        type: 'CollabAgentToolCall', tool: 'spawn_agent', status: 'completed', receiver_thread_ids: ids.slice(1)
+      } } },
+      { type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'Root is waiting for children' } }
+    ])
+    for (let index = 1; index < ids.length; index += 1) {
+      writeJsonl(files[index], [
+        { type: 'session_meta', ordinal: 0, payload: { id: ids[index], session_id: ids[0], parent_thread_id: ids[0], subagent_history_start_ordinal: 4 } },
+        parentMeta,
+        { type: 'event_msg', ordinal: 2, payload: { type: 'item_completed', item: {
+          type: 'CollabAgentToolCall', tool: 'spawn_agent', status: 'completed', receiver_thread_ids: ['inherited-sibling']
+        } } },
+        { type: 'event_msg', ordinal: 3, payload: { type: 'exec_approval_request', call_id: 'inherited-approval', command: 'Old approval' } },
+        { type: 'event_msg', ordinal: 4, payload: { type: 'task_started' } },
+        index === 1
+          ? { type: 'event_msg', ordinal: 5, payload: { type: 'task_complete', last_agent_message: 'First child done' } }
+          : { type: 'response_item', ordinal: 5, payload: { type: 'reasoning', summary: [{ text: 'Second child working' }] } }
+      ])
+    }
+    files.forEach((file) => touch(file, NOW))
+    const store = newStore()
+    const watcher = watcherFor(store, roots, () => new Set(['codex']))
+    await watcher.scan()
+    expect(store.list()).toHaveLength(1)
+    expect(store.list()[0]).toMatchObject({ id: `codex-${ids[0]}`, state: 'running' })
+    expect(store.list()[0].tasks).toMatchObject([
+      { id: ids[1], status: 'done', detail: 'First child done' },
+      { id: ids[2], status: 'active', detail: 'Second child working' }
+    ])
+    expect(store.list()[0].tasks).toHaveLength(2)
+    appendFileSync(files[2], JSON.stringify({ type: 'event_msg', ordinal: 6, payload: { type: 'task_complete', last_agent_message: 'Second child done' } }) + '\n')
+    await watcher.scan()
+    expect(store.list()).toHaveLength(1)
+    expect(store.list()[0]).toMatchObject({ state: 'success', tasks: [{ status: 'done' }, { status: 'done' }] })
   })
 
   it('treats growth as life when the file system does not bump mtime', async () => {

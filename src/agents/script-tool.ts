@@ -1,4 +1,5 @@
 import { parse, type Node, type Expression, type CallExpression } from 'acorn'
+import { isUserInputTool } from '../shared/island-behavior'
 
 const UNKNOWN = Symbol('dynamic expression')
 
@@ -8,25 +9,32 @@ export function unwrapExec(source: string): { name: string; input: Record<string
   try { root = parse(source, { ecmaVersion: 'latest', sourceType: 'module', allowAwaitOutsideFunction: true }) }
   catch { return null }
   const pending: Node[] = [root]
-  let first: CallExpression | undefined
+  const calls: CallExpression[] = []
   while (pending.length) {
     const node = pending.pop()!
     if (node.type === 'CallExpression') {
       const call = node as CallExpression
       const callee = call.callee
       if (callee.type === 'MemberExpression' && !callee.computed && callee.object.type === 'Identifier' &&
-        callee.object.name === 'tools' && callee.property.type === 'Identifier' && (!first || call.start < first.start)) first = call
+        callee.object.name === 'tools' && callee.property.type === 'Identifier') calls.push(call)
     }
     for (const value of Object.values(node)) {
       if (Array.isArray(value)) pending.push(...value.filter(isNode))
       else if (isNode(value)) pending.push(value)
     }
   }
-  if (!first || first.callee.type !== 'MemberExpression' || first.callee.property.type !== 'Identifier') return null
-  const name = first.callee.property.name.replace(/^multi_agent_v\d+__/, '')
-  const argument = first.arguments[0]
-  const value = argument && argument.type !== 'SpreadElement' ? literal(argument) : UNKNOWN
-  return { name, input: value !== UNKNOWN && value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
+  const tools = calls.sort((a, b) => a.start - b.start).flatMap(call => {
+    if (call.callee.type !== 'MemberExpression' || call.callee.property.type !== 'Identifier') return []
+    const name = call.callee.property.name.replace(/^multi_agent_v\d+__/, '')
+    const argument = call.arguments[0]
+    const value = argument && argument.type !== 'SpreadElement' ? literal(argument) : UNKNOWN
+    const input = value !== UNKNOWN && value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+    return [{ name, input }]
+  })
+  // A batch can write a file or read data before a later tool requests permission.
+  // Surface explicit human attention first, using only parsed static arguments.
+  return tools.find(tool => tool.input.sandbox_permissions === 'require_escalated') ??
+    tools.find(tool => isUserInputTool(tool.name)) ?? tools[0] ?? null
 }
 
 function isNode(value: unknown): value is Node {

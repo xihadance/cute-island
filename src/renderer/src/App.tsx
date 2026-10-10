@@ -2,12 +2,16 @@ import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 
 import { STATE_LABEL, type Activity } from '../../shared/activity'
 import { getBridge } from './bridge'
 import { Island } from './Island'
+import { useIslandDrag } from './useIslandDrag'
+import { useIslandBehavior } from './useIslandBehavior'
+import { isPassive } from '../../shared/island-behavior'
 import type { IslandApi } from './env'
 
 export function App() {
   const bridgeRef = useRef<IslandApi | null>(null)
   if (!bridgeRef.current) bridgeRef.current = getBridge()
   const bridge = bridgeRef.current
+  const behavior = useIslandBehavior(bridge)
   const [activities, setActivities] = useState<Activity[]>([])
   const [expanded, setExpanded] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -16,7 +20,16 @@ export function App() {
   const [resting, setResting] = useState(false)
   const expandedRef = useRef(false)
   const hoveringRef = useRef(false)
-  const interacting = expanded || selectedId !== null
+  const managed = behavior.mode === 'managed'
+  const pending = activities.filter(item => behavior.attentionIds.includes(item.id))
+  const attention = managed && pending.length > 0
+  const passive = isPassive(behavior)
+  const drag = useIslandDrag(bridge, !passive, attention)
+  const visibleActivities = managed ? attention ? pending : activities.slice(0, 1) : activities
+  const visibleSelectedId = managed ? (pending.find(item => item.id === selectedId)?.id ?? pending[0]?.id ?? null) : selectedId
+  const interacting = managed ? attention : !drag.dock.collapsed && (expanded || selectedId !== null || drag.dock.edge !== null)
+  const passiveRef = useRef(passive)
+  passiveRef.current = passive
   expandedRef.current = interacting
 
   useEffect(() => {
@@ -37,6 +50,7 @@ export function App() {
   const attentionId = activities.find((item) => item.state === 'error' || item.state === 'approval')?.id
 
   useEffect(() => {
+    if (managed) return
     if (!primary) {
       setExpanded(false)
       setSelectedId(null)
@@ -48,20 +62,20 @@ export function App() {
     }
     setSelectedId(null)
     if (primary.state === 'error' || primary.state === 'approval') setExpanded(true)
-  }, [primary, stacked])
+  }, [primary, stacked, managed])
 
   useEffect(() => {
-    if (stacked && attentionId) setSelectedId(attentionId)
-  }, [stacked, attentionId])
+    if (!managed && stacked && attentionId) setSelectedId(attentionId)
+  }, [stacked, attentionId, managed])
 
   useEffect(() => {
-    if (primary || pointerNear || expanded) {
+    if (primary || (!passive && (pointerNear || expanded))) {
       setResting(false)
       return
     }
     const timer = window.setTimeout(() => setResting(true), 2200)
     return () => window.clearTimeout(timer)
-  }, [primary, pointerNear, expanded])
+  }, [primary, pointerNear, expanded, passive])
 
   useEffect(() => {
     if (bridge.onPointer) {
@@ -73,7 +87,7 @@ export function App() {
     const syncIgnore = (overIsland: boolean): void => {
       hoveringRef.current = overIsland
       setHovered(overIsland)
-      bridge.setIgnoreMouse(!(overIsland || expandedRef.current))
+      bridge.setIgnoreMouse(passiveRef.current || !(overIsland || expandedRef.current))
     }
     const onMove = (event: MouseEvent): void => {
       const element = document.elementFromPoint(event.clientX, event.clientY)
@@ -97,8 +111,8 @@ export function App() {
 
   useEffect(() => {
     if (bridge.onPointer) return
-    bridge.setIgnoreMouse(!(hoveringRef.current || interacting))
-  }, [bridge, interacting])
+    bridge.setIgnoreMouse(passive || !(hoveringRef.current || interacting))
+  }, [bridge, interacting, passive])
 
   useEffect(() => {
     if (!bridge.setInteraction) return
@@ -125,6 +139,15 @@ export function App() {
   }, [bridge, interacting])
 
   const toggle = (): void => {
+    if (managed) return
+    if (drag.dock.edge) {
+      drag.setDockExpanded(drag.dock.collapsed)
+      if (drag.dock.collapsed) {
+        setResting(false)
+        setExpanded(!!primary && !stacked)
+      }
+      return
+    }
     if (!primary || primary.state === 'error') {
       if (primary?.state === 'error') setExpanded(true)
       return
@@ -133,7 +156,9 @@ export function App() {
   }
 
   const collapseFromOutside = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (managed) return
     if (event.target !== event.currentTarget) return
+    if (drag.dock.edge) drag.setDockExpanded(false)
     if (primary?.state === 'error') return
     setExpanded(false)
     setSelectedId(null)
@@ -141,18 +166,22 @@ export function App() {
 
   return (
     <>
-      <div className="stage" onMouseDown={collapseFromOutside}>
-        <div className="sr-only" aria-live="polite">
+      <div className="stage" data-passive={passive} onMouseDown={collapseFromOutside}>
+        <div className="sr-only" aria-live={passive ? 'off' : 'polite'}>
           {activities.length > 0 ? activities.map((item) => `${item.agent}，${item.client ?? '未知客户端'}，${STATE_LABEL[item.state]} ${item.title}`).join('，') : '空闲'}
         </div>
         <Island
-          bridge={bridge}
+          drag={drag}
+          behaviorMode={behavior.mode}
+          passive={passive}
+          attention={attention}
+          onAcknowledge={attention ? (id) => bridge.acknowledge(id) : undefined}
           hovered={hovered}
           onHover={setHovered}
-          activities={activities}
-          expanded={expanded && !!primary && !stacked}
-          selectedId={selectedId}
-          resting={resting && !primary}
+          activities={visibleActivities}
+          expanded={managed ? attention && pending.length === 1 : expanded && !!primary && !stacked}
+          selectedId={managed && !attention ? null : visibleSelectedId}
+          resting={resting && !primary && !drag.dock.edge}
           onToggle={toggle}
           onSelect={setSelectedId}
           onDismiss={(id) => {
@@ -163,6 +192,10 @@ export function App() {
       </div>
       {bridge.simulateError && bridge.clear && (
         <div className="dev-panel">
+          <div className="mode-switch" role="group" aria-label="灵动岛模式">
+            <button type="button" data-testid="mode-focus" aria-pressed={!managed} onClick={() => bridge.setMode('focus')}>关注模式</button>
+            <button type="button" data-testid="mode-managed" aria-pressed={managed} onClick={() => bridge.setMode('managed')}>托管模式</button>
+          </div>
           <button type="button" data-testid="demo" onClick={() => void bridge.playDemo()}>
             播放演示
           </button>

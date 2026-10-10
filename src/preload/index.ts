@@ -1,7 +1,34 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { Activity } from '../shared/activity'
+import type { DockState } from '../shared/window-position'
+import type { IslandBehavior, IslandMode } from '../shared/island-behavior'
 
 const island = {
+  getBehavior(): Promise<IslandBehavior> {
+    return ipcRenderer.invoke('island:get-behavior')
+  },
+  setMode(mode: IslandMode): void {
+    ipcRenderer.send('island:set-mode', mode)
+  },
+  acknowledge(id: string): void {
+    ipcRenderer.send('island:acknowledge', id)
+  },
+  onBehavior(callback: (behavior: IslandBehavior) => void): () => void {
+    const listener = (_event: IpcRendererEvent, behavior: IslandBehavior): void => callback(behavior)
+    ipcRenderer.on('island:behavior', listener)
+    return () => { ipcRenderer.removeListener('island:behavior', listener) }
+  },
+  getDock(): Promise<DockState> {
+    return ipcRenderer.invoke('island:get-dock')
+  },
+  setDockExpanded(expanded: boolean): void {
+    ipcRenderer.send('island:set-dock-expanded', expanded)
+  },
+  onDock(callback: (dock: DockState) => void): () => void {
+    const listener = (_event: IpcRendererEvent, dock: DockState): void => callback(dock)
+    ipcRenderer.on('island:dock', listener)
+    return () => { ipcRenderer.removeListener('island:dock', listener) }
+  },
   dragWindow(phase: 'start' | 'move' | 'end'): void {
     ipcRenderer.send('island:drag', phase)
   },

@@ -7,6 +7,8 @@ export interface SessionView {
   id: string
   /** Native id; never reconstruct it from the sanitized activity id. */
   sessionId?: string
+  /** Explicit native handoff to a replacement session; not a sub-agent link. */
+  continuedInSessionId?: string
   agent: string
   client?: string
   /** Latest turn timing from transcript events, independent of watcher updates. */
@@ -48,6 +50,8 @@ export interface ParsedTranscript {
   client?: string
   /** A session id recorded inside the transcript, preferred over the file name. */
   sessionId?: string
+  /** Native continuation target, recorded by the source transcript. */
+  continuedInSessionId?: string
 }
 
 export interface SessionRegistration {

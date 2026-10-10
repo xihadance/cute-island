@@ -2,7 +2,7 @@ import { open } from 'node:fs/promises'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { commandText } from '../operation'
-import { cleanText, contentEvents, isRecord, jsonlRows, messageEvents, outputText, parseMaybeRecord, safeId, textOf, timestampEvents, toolEvent } from '../events'
+import { cleanText, contentEvents, eventTimestamp, isRecord, jsonlRows, messageEvents, outputText, parseMaybeRecord, safeId, textOf, timestampEvents, toolEvent } from '../events'
 import type { AgentEvent, AgentPlugin, ChildLink, ParsedTranscript } from '../types'
 import { unwrapExec } from '../script-tool'
 export { unwrapExec } from '../script-tool'
@@ -39,6 +39,7 @@ interface Call {
   title: string
   /** Waiting on sub-agents is already shown by their own tasks. */
   background: boolean
+  at?: number
 }
 
 function codexSessionId(file: string): string {
@@ -53,6 +54,10 @@ function createCodexParser(): (text: string) => ParsedTranscript {
   const processes = new Map<string, string>()
   const open = new Set<string>()
   let events: AgentEvent[] = []
+  let sessionId: string | undefined
+  let client: string | undefined
+  let metadataSeen = false
+  let historyStart: number | undefined
 
   const settleTurn = (): void => {
     // Codex never records whether yielded work survived the turn, so stop claiming it runs.
@@ -65,16 +70,24 @@ function createCodexParser(): (text: string) => ParsedTranscript {
 
   const parse = (text: string): ParsedTranscript => {
     events = []
-    let sessionId: string | undefined
-    let client: string | undefined
     for (const row of jsonlRows(text)) {
       if (!isRecord(row)) continue
       if (row.type === 'session_meta') {
-        const meta = isRecord(row.payload) ? row.payload : {}
-        sessionId = textOf(meta.id) || undefined
-        client = codexClient(meta)
+        // Forked transcripts replay their parent's metadata after their own header.
+        // The first header owns this file, including across incremental read batches.
+        if (!metadataSeen) {
+          metadataSeen = true
+          const meta = isRecord(row.payload) ? row.payload : {}
+          sessionId = textOf(meta.id) || undefined
+          client = codexClient(meta)
+          const start = meta.subagent_history_start_ordinal
+          if (typeof start === 'number' && Number.isSafeInteger(start) && start > 0) historyStart = start
+        }
         continue
       }
+      // Ordinals before this explicit boundary are inherited context, not work
+      // performed by this child (including old approvals and spawned siblings).
+      if (historyStart !== undefined && typeof row.ordinal === 'number' && row.ordinal < historyStart) continue
       if (row.type === 'event_msg') {
         const payload = isRecord(row.payload) ? row.payload : {}
         const type = textOf(payload.type)
@@ -83,7 +96,7 @@ function createCodexParser(): (text: string) => ParsedTranscript {
         continue
       }
       if (row.type === 'response_item') {
-        events.push(...timestampEvents(responseItem(isRecord(row.payload) ? row.payload : {}), row))
+        events.push(...timestampEvents(responseItem(isRecord(row.payload) ? row.payload : {}, eventTimestamp(row)), row))
         continue
       }
       if (row.type === 'turn_context') continue
@@ -93,7 +106,7 @@ function createCodexParser(): (text: string) => ParsedTranscript {
   }
   return parse
 
-  function responseItem(payload: Record<string, unknown>): AgentEvent[] {
+  function responseItem(payload: Record<string, unknown>, at?: number): AgentEvent[] {
     const type = textOf(payload.type)
     if (type === 'function_call' || type === 'custom_tool_call' || type === 'tool_call') {
       let name = textOf(payload.name) || 'tool'
@@ -105,7 +118,7 @@ function createCodexParser(): (text: string) => ParsedTranscript {
       }
       const callId = textOf(payload.call_id) || undefined
       const event = toolEvent(name, input, callId)
-      if (callId) calls.set(callId, { name: name.split('.').pop() ?? name, input, title: event.title, background: event.operation?.kind !== 'agent' })
+      if (callId) calls.set(callId, { name: name.split('.').pop() ?? name, input, title: event.title, background: event.operation?.kind !== 'agent', at })
       return [event]
     }
     if (type === 'function_call_output' || type === 'custom_tool_call_output' || type === 'tool_result') {
@@ -163,7 +176,7 @@ function createCodexParser(): (text: string) => ParsedTranscript {
     if (!call.background) return []
     const taskId = taskKey(cell ? 'cell' : 'proc', key)
     open.add(taskId)
-    return [{ kind: 'task_start', taskId, task: 'command', label: call.title }]
+    return [{ kind: 'task_start', taskId, task: 'command', label: call.title, at: call.at }]
   }
 }
 
@@ -201,8 +214,16 @@ function codexEvent(payload: Record<string, unknown>): AgentEvent[] {
   if (type === 'exec_approval_request' || type === 'apply_patch_approval_request') {
     return [toolEvent(type === 'exec_approval_request' ? 'shell' : 'apply_patch', payload, textOf(payload.call_id) || undefined, true)]
   }
-  if (type === 'item_completed' && isRecord(payload.item) && payload.item.type === 'CollabAgentToolCall') {
-    return collabEvents(payload.item)
+  if (type === 'item_completed' && isRecord(payload.item)) {
+    if (payload.item.type === 'CollabAgentToolCall') return collabEvents(payload.item)
+    if (payload.item.type === 'SubAgentActivity' && payload.item.kind === 'started') {
+      const item = payload.item
+      const taskId = safeId(textOf(item.agent_thread_id))
+      if (!taskId) return []
+      const label = textOf(item.agent_path).split('/').filter(Boolean).pop() || '子 Agent'
+      return [{ kind: 'task_start', taskId, task: 'agent', label,
+        at: eventTimestamp({ timestamp: payload.started_at_ms }) }]
+    }
   }
   return []
 }
