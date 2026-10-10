@@ -222,6 +222,17 @@ export function mergeChildTasks<T extends TurnView>(view: T, children: readonly 
       : child.live ? 'active' : undefined
     const detail = GENERIC_TITLES.has(childView.title) ? undefined : childView.title
     const existing = tasks.find((task) => task.id === child.link.taskId)
+    if (childView.terminal && childView.endedAt !== undefined) {
+      // A reused task can start before its child transcript has appended the new turn.
+      if (existing?.startedAt !== undefined && existing.startedAt > childView.endedAt) continue
+      // Child completion is overlaid, not written back into the parent's reducer.
+      // Retire the old round here as well, so its cached "active" spawn cannot
+      // bring an already finished child (and its alert) into every new user turn.
+      if (view.startedAt !== undefined && childView.endedAt < view.startedAt) {
+        if (existing) tasks.splice(tasks.indexOf(existing), 1)
+        continue
+      }
+    }
     if (existing) {
       if (existing.startedAt === undefined && childView.startedAt !== undefined
         && (existing.endedAt === undefined || childView.startedAt <= existing.endedAt)) {

@@ -107,7 +107,7 @@ Windows 上这些目录在 `%USERPROFILE%` 下面，布局相同。可以用 `CL
 
 子 Agent 与后台命令在展开后单独列出，紧凑态显示运行数量。嵌套子 Agent 会逐层合并到顶层会话；仍有下级任务运行时保持执行状态。默认清理静默超过 30 分钟且缺少存活依据的后台任务，但原生忙碌登记或仍活跃的下级任务会保留对应任务。会话元数据尚未写完整时暂缓归类，后续扫描会重试。
 
-每个子任务显示可见的状态和执行时间：有关联子会话时显示思考中、执行中、等待中或需要审批；结束后显示已完成、失败或已停止。计时来自任务启动/结束事件及子会话日志，普通状态或详情更新不会重置，结束后冻结。缺少可靠起止时间显示「未记录」。`tasks` 可传可选的 `state`、`startedAt` 和 `endedAt`；同一任务更新保留已知时间，新一轮显式更换 `startedAt`。子会话需要审批时，即使父会话还在正常执行，也会触发托管提醒。
+每个子任务显示可见的状态和执行时间：有关联子会话时显示思考中、执行中、等待中或需要审批；结束后显示已完成、失败或已停止。计时来自任务启动/结束事件及子会话日志，普通状态或详情更新不会重置，结束后冻结。缺少可靠起止时间显示「未记录」。`tasks` 可传可选的 `state`、`startedAt` 和 `endedAt`；同一任务更新保留已知时间，新一轮显式更换 `startedAt`。子会话需要审批时，即使父会话还在正常执行，也会触发托管提醒。开始新一轮时移除已结束的旧子任务，避免历史异常重复提醒；跨轮次仍在运行的任务继续保留。
 
 Codex 子线程继承的父会话历史不会重复计入任务：以日志首条 metadata 确定线程身份，并根据 `subagent_history_start_ordinal` 排除继承的审批、异常和子任务。兼容 `SubAgentActivity.started` 与旧版协作事件。会话归属依据原生线程 ID 和父子关系，不会因标题、目录或历史内容相同就合并独立会话。
 
@@ -152,11 +152,11 @@ node scripts/smoke-interaction.cjs
 
 它验证实际窗口移动、点击与拖动区分、命令选择、透明度、四边收纳与点击展开、托管模式鼠标穿透与提醒、子任务状态与执行时间、子会话审批、重启恢复和托盘重置，截图保存在 `output/playwright/`。
 
-发布前同步更新 `package.json`、`package-lock.json` 和 `RELEASE_NOTES.md`。推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)，并附上版本说明。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.6`。
+发布前同步更新 `package.json`、`package-lock.json` 和 `RELEASE_NOTES.md`。推送版本标签，或在 Actions 里手动运行 Release，都会在三端打包成功后发布到这个仓库的 [Releases](https://github.com/xihadance/cute-island/releases)，并附上版本说明。手动运行时，标签取 `package.json` 里的版本号，例如当前是 `v0.1.7`。
 
 ```bash
-git tag v0.1.6
-git push origin v0.1.6
+git tag v0.1.7
+git push origin v0.1.7
 ```
 
 ## 图标
