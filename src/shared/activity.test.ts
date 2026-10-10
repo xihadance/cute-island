@@ -21,6 +21,16 @@ function schedulerOf(pending: Array<{ fn: () => void; cancelled: boolean }>) {
 }
 
 describe('ActivityStore', () => {
+  it('validates client labels, preserves them across turns, and supports explicit clearing', () => {
+    const store = new ActivityStore(() => ({ cancel() {} }))
+    expect(store.upsert({ id: 'client', client: ' VS Code ' }).client).toBe('VS Code')
+    store.end('client', { result: 'success' })
+    expect(store.upsert({ id: 'client', state: 'running' }).client).toBe('VS Code')
+    expect(store.upsert({ id: 'client', client: null }).client).toBeUndefined()
+    for (const client of ['', '  ', 1, {}, []]) expect(() => store.upsert({ id: 'client', client })).toThrow('client 无效')
+    expect(store.upsert({ id: 'client', client: 'a'.repeat(80) }).client).toHaveLength(40)
+  })
+
   it('keeps approvals until an explicit update, prioritizes them, and isolates operation snapshots', () => {
     const pending: Array<{ fn: () => void; cancelled: boolean }> = []
     const store = new ActivityStore(schedulerOf(pending))

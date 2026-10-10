@@ -70,6 +70,7 @@ interface ReaderState {
   reducer: ReturnType<typeof createReducer>
   seen: boolean
   nativeId?: string
+  client?: string
 }
 
 export class SessionReader {
@@ -120,6 +121,7 @@ export class SessionReader {
       const consume = (text: string): void => {
         const parsed = state.parse(text)
         if (parsed.sessionId) state.nativeId = parsed.sessionId
+        if (parsed.client) state.client = parsed.client
         if (parsed.events.length) { state.seen = true; state.reducer.push(parsed.events) }
       }
       while (state.offset < end) {
@@ -151,7 +153,7 @@ export class SessionReader {
 
   private view(state: ReaderState): SessionView | null {
     return state.seen ? { id: activityId(state.plugin.kind, state.nativeId || state.sessionId), agent: state.plugin.label,
-      kind: state.plugin.kind, ...state.reducer.snapshot() } : null
+      kind: state.plugin.kind, sessionId: state.nativeId || state.sessionId, client: state.client, ...state.reducer.snapshot() } : null
   }
 }
 

@@ -72,6 +72,7 @@ async function push(
   if (!args.state && !args.title) throw new Error('push 至少需要 --state 或 --title')
   const body: Record<string, unknown> = { id: args.id ?? 'default' }
   if (args.agent) body.agent = args.agent
+  if ('client' in args) body.client = args.client === 'null' ? null : args.client
   if (args.state) body.state = parseState(args.state)
   if (args.title) body.title = args.title
   if ('detail' in args) body.detail = args.detail === 'null' ? null : args.detail
@@ -194,6 +195,7 @@ const USAGE = `用法
 push 选项
   --id        活动 id，默认 default
   --agent     显示名称
+  --client    来源客户端，例如 VS Code、Windows Terminal；null 清空
   --state     thinking | running | waiting | approval | success | error
   --title     一行标题
   --detail    补充说明，传 null 可清空

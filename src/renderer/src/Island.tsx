@@ -55,9 +55,9 @@ export function Island({ bridge, hovered, onHover, activities, expanded, selecte
       aria-expanded={stacked ? selectedId !== null : expanded}
       aria-label={
         stacked
-          ? activities.map((item) => `${item.agent} ${item.title}`).join('，')
+          ? activities.map((item) => `${item.agent}，${item.client ?? '未知客户端'}，${item.title}`).join('，')
           : activity
-            ? `${activity.agent} ${activity.title}`
+            ? `${activity.agent}，${activity.client ?? '未知客户端'}，${activity.title}`
             : '灵动岛'
       }
       initial={{ width: 86, height: 10, borderRadius: 5, opacity: 0 }}
@@ -109,19 +109,31 @@ export function Island({ bridge, hovered, onHover, activities, expanded, selecte
 }
 
 function Compact({ activity }: { activity: Activity }) {
-  const appearance = agentAppearance(activity.agent)
   return (
     <div className="compact">
       <AgentBadge agent={activity.agent} state={activity.state} />
-      <span className="compact-agent" data-testid="island-agent" style={{ color: appearance.color }}>
-        {appearance.short}
-      </span>
+      <SessionIdentity activity={activity} />
       <span className="compact-title" data-testid="island-title">
         {activity.title}
       </span>
       <TaskBadge activity={activity} />
       <Status activity={activity} compact />
     </div>
+  )
+}
+
+function ClientLabel({ client }: { client?: string }) {
+  const label = client ?? '未知客户端'
+  return <span className="client-label" data-testid="session-client" title={`来源客户端：${label}`}>{label}</span>
+}
+
+function SessionIdentity({ activity }: { activity: Activity }) {
+  const appearance = agentAppearance(activity.agent)
+  return (
+    <span className="session-identity">
+      <span className="compact-agent" data-testid="island-agent" style={{ color: appearance.color }}>{appearance.short}</span>
+      <ClientLabel client={activity.client} />
+    </span>
   )
 }
 
@@ -162,7 +174,6 @@ function SessionRow({
   onSelect: () => void
   onDismiss: () => void
 }) {
-  const appearance = agentAppearance(activity.agent)
   return (
     <div className={`session-row${open ? ' open' : ''}`} data-testid="session-row" data-session={activity.id} data-state={activity.state}>
       <button
@@ -175,9 +186,7 @@ function SessionRow({
         }}
       >
         <AgentBadge agent={activity.agent} state={activity.state} />
-        <span className="compact-agent" style={{ color: appearance.color }}>
-          {appearance.short}
-        </span>
+        <SessionIdentity activity={activity} />
         <span className="compact-title">{activity.title}</span>
         <TaskBadge activity={activity} />
         <Status activity={activity} compact />
@@ -215,8 +224,9 @@ function Expanded({ activity, onDismiss }: { activity: Activity; onDismiss: () =
       <div className="expanded-head">
         <AgentBadge agent={activity.agent} state={activity.state} />
         <div className="head-copy">
-          <div className="agent" style={{ color: appearance.color }}>
-            {appearance.label}
+          <div className="agent-heading">
+            <span className="agent" style={{ color: appearance.color }}>{appearance.label}</span>
+            <ClientLabel client={activity.client} />
           </div>
           <Status activity={activity} />
         </div>

@@ -5,7 +5,10 @@ export type AgentKind = 'claude' | 'codex' | 'gemini' | 'cursor'
 
 export interface SessionView {
   id: string
+  /** Native id; never reconstruct it from the sanitized activity id. */
+  sessionId?: string
   agent: string
+  client?: string
   kind: string
   state: ActivityState
   title: string
@@ -36,8 +39,16 @@ export type AgentEvent =
 
 export interface ParsedTranscript {
   events: AgentEvent[]
+  client?: string
   /** A session id recorded inside the transcript, preferred over the file name. */
   sessionId?: string
+}
+
+export interface SessionRegistration {
+  sessionId: string
+  pid: number
+  busy: boolean
+  updatedAt: number
 }
 
 /** Where a sub-agent transcript belongs in its parent's view. */
@@ -75,4 +86,6 @@ export interface AgentPlugin {
   child?(file: string): Promise<ChildLink | null | undefined>
   /** Native session ids an agent has registered as busy, independent of mtime. */
   liveSessions?(root: string): Promise<Set<string>>
+  /** Native session/PID bindings, including idle sessions for client identification. */
+  registeredSessions?(root: string): Promise<SessionRegistration[]>
 }

@@ -4,7 +4,7 @@ import type { ActivityStore } from '../shared/activity'
 import { collect, mapLimited, readSession, SessionReader, type SessionFile } from './files'
 import { activityId } from './parse'
 import { BUILTIN_PLUGINS } from './plugins'
-import { listAgentProcesses } from './processes'
+import { clientForProcess, listProcessSnapshot, matchAgentProcesses, type ProcessSnapshot } from './processes'
 import { dropActiveTasks, mergeChildTasks, presentTasks, type ChildSession } from './reduce'
 import type { AgentPlugin, ChildLink, SessionView } from './types'
 
@@ -26,6 +26,7 @@ export interface WatchOptions {
   plugins?: readonly AgentPlugin[]
   now?: () => number
   listProcesses?: () => Set<string> | Promise<Set<string>>
+  listProcessSnapshot?: () => ProcessSnapshot | Promise<ProcessSnapshot>
   intervalMs?: number
   freshMs?: number
   discoveryMs?: number
@@ -45,6 +46,7 @@ interface CachedSession {
   view: SessionView | null
   /** When the stamp last changed. Windows may not bump mtime while a writer holds the file. */
   changedAt: number
+  client?: string
 }
 
 interface LoadedFile {
@@ -60,7 +62,8 @@ export function defaultAgentRoots(home = homedir(), env: NodeJS.ProcessEnv = pro
 export class SessionWatcher {
   private readonly sources: Array<{ plugin: AgentPlugin; root: string }>
   private readonly now: () => number
-  private readonly listProcesses: NonNullable<WatchOptions['listProcesses']>
+  private readonly listProcesses: WatchOptions['listProcesses']
+  private readonly listSnapshot: WatchOptions['listProcessSnapshot']
   private readonly intervalMs: number
   private readonly freshMs: number
   private readonly discoveryMs: number
@@ -75,6 +78,7 @@ export class SessionWatcher {
   private files: SessionFile[] = []
   private running = new Set<string>()
   private liveIds = new Map<string, Set<string>>()
+  private sessionClients = new Map<string, Map<string, string | null>>()
   private lastDiscovery = -Infinity
   private lastProcesses = -Infinity
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -87,7 +91,8 @@ export class SessionWatcher {
     const roots = options.roots ?? defaultAgentRoots(homedir(), process.env, plugins)
     this.sources = plugins.filter((plugin) => roots[plugin.kind]).map((plugin) => ({ plugin, root: roots[plugin.kind] }))
     this.now = options.now ?? Date.now
-    this.listProcesses = options.listProcesses ?? (() => listAgentProcesses(plugins))
+    this.listProcesses = options.listProcesses
+    this.listSnapshot = options.listProcessSnapshot ?? (options.listProcesses ? undefined : () => listProcessSnapshot(plugins))
     this.intervalMs = options.intervalMs ?? 800
     this.freshMs = options.freshMs ?? FRESH_MS
     this.discoveryMs = options.discoveryMs ?? 10_000
@@ -131,13 +136,31 @@ export class SessionWatcher {
     const now = this.now()
     if (now - this.lastProcesses >= this.processMs) {
       this.lastProcesses = now
+      let processes: ProcessSnapshot['processes'] = []
       try {
-        this.running = await this.listProcesses()
+        if (this.listSnapshot) {
+          const snapshot = await this.listSnapshot()
+          this.running = snapshot.running
+          processes = snapshot.processes
+        } else if (this.listProcesses) this.running = await this.listProcesses()
       } catch {
         // A transient process-query failure is not evidence that an agent exited.
       }
-      this.liveIds = new Map(await Promise.all(this.sources.map(async ({ plugin, root }) =>
-        [plugin.kind, plugin.liveSessions ? await plugin.liveSessions(root) : new Set<string>()] as const)))
+      const registrations = await Promise.all(this.sources.map(async ({ plugin, root }) => {
+        const clients = new Map<string, string | null>()
+        if (!plugin.registeredSessions) return { kind: plugin.kind, clients, live: plugin.liveSessions ? await plugin.liveSessions(root) : new Set<string>() }
+        const sessions = await plugin.registeredSessions(root)
+        for (const session of sessions) {
+          const process = processes.find((row) => row.pid === session.pid)
+          if (!process || (process.createdAt !== undefined && process.createdAt > session.updatedAt)) continue
+          if (!matchAgentProcesses(process.commandLine || process.name, [plugin]).has(plugin.kind)) continue
+          const client = clientForProcess(session.pid, processes) ?? null
+          clients.set(session.sessionId, clients.has(session.sessionId) && clients.get(session.sessionId) !== client ? null : client)
+        }
+        return { kind: plugin.kind, clients, live: new Set(sessions.filter((session) => session.busy).map((session) => session.sessionId)) }
+      }))
+      this.liveIds = new Map(registrations.map(({ kind, live }) => [kind, live]))
+      this.sessionClients = new Map(registrations.map(({ kind, clients }) => [kind, clients]))
     }
     if (generation !== this.generation) return
     if (now - this.lastDiscovery >= this.discoveryMs) {
@@ -159,9 +182,13 @@ export class SessionWatcher {
         // Incomplete appends and atomic JSON rewrites must not clear a live session.
         const parsed = view ?? previous?.view ?? null
         const changedAt = !previous ? info.mtimeMs : previous.stamp === stamp ? previous.changedAt : now
-        this.cache.set(file.path, { stamp, view: parsed, changedAt })
+        const registered = this.sessionClients.get(file.plugin.kind)?.get(parsed?.sessionId ?? file.sessionId)
+        // Retain the last observed host after exit, but let a new binding replace it.
+        const remembered = previous?.view?.sessionId === parsed?.sessionId && previous?.client !== previous?.view?.client ? previous?.client : undefined
+        const client = registered === null ? parsed?.client : registered ?? remembered ?? parsed?.client
+        this.cache.set(file.path, { stamp, view: parsed, changedAt, client })
         seen.add(file.path)
-        if (parsed) loaded.push({ file, view: parsed, age: Math.max(0, now - Math.max(info.mtimeMs, changedAt)) })
+        if (parsed) loaded.push({ file, view: { ...parsed, client }, age: Math.max(0, now - Math.max(info.mtimeMs, changedAt)) })
       } catch {
         // Logs may be rotated, locked or deleted while an agent writes them.
       }
@@ -232,12 +259,13 @@ export class SessionWatcher {
   }
 
   private publish(file: string, view: SessionView): void {
-    const signature = JSON.stringify([view.state, view.title, view.detail ?? '', view.operation, view.steps, view.tasks])
+    const signature = JSON.stringify([view.state, view.title, view.detail ?? '', view.operation, view.steps, view.tasks, view.client])
     const previous = this.tracked.get(file)
     this.tracked.set(file, { signature, id: view.id })
     if (previous?.signature === signature) return
     this.store.upsert({
       id: view.id, agent: view.agent, state: view.state, title: view.title,
+      client: view.client ?? null,
       detail: view.detail ?? null, operation: view.operation ?? null, steps: view.steps,
       tasks: view.tasks.length ? view.tasks : null
     })

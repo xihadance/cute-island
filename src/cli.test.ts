@@ -10,6 +10,18 @@ afterEach(async () => {
 })
 
 describe('runCli', () => {
+  it('sets and clears a client through HTTP while ordinary updates preserve it', async () => {
+    const store = new ActivityStore(() => ({ cancel() {} }))
+    const server = await startStatusServer(store, { port: 0 })
+    servers.push(server)
+    const io = { env: { CUTE_ISLAND_PORT: String(server.port) }, stdout() {} }
+    expect(await runCli(['push', '--agent', 'Codex', '--client', 'Windows Terminal', '--state', 'running'], io)).toBe(0)
+    expect(await runCli(['push', '--title', '继续检查'], io)).toBe(0)
+    expect(store.get('default')?.client).toBe('Windows Terminal')
+    expect(await runCli(['push', '--state', 'thinking', '--client', 'null'], io)).toBe(0)
+    expect(store.get('default')?.client).toBeUndefined()
+  })
+
   it('pushes read-only approval and capability metadata through the API', async () => {
     const store = new ActivityStore(() => ({ cancel() {} }))
     const server = await startStatusServer(store, { port: 0 })

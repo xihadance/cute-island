@@ -11,6 +11,8 @@ Windows、macOS、Linux 上的 PC 灵动岛。黑胶囊贴在屏幕顶部正中�
 
 执行状态和操作类型使用 SVG 图标：命令终端、文件读写、搜索、MCP、Skill 和子 Agent 协作各有标识。执行中显示轻量动画，遵循系统「减少动态效果」设置。Codex 标识采用官方 VS Code 扩展使用的 OpenAI Blossom 矢量图形。
 
+紧凑态、多会话列表和展开详情均显示来源客户端，独立于 Agent 名称和命令 Shell。例如同为 Claude Code 的会话可以分别标注 VS Code、Cursor、Windows Terminal 或 PowerShell。来源标签只用于展示；点击会话仍展开详情。
+
 展开命令可查看命令内容、Shell 和工作目录；长命令支持换行、滚动和选择复制。MCP 显示服务与工具名称，Skill 显示读取或调用的技能名称，子 Agent 显示任务名称。需要审批时自动展开琥珀色提示，提醒到原 Agent 中审批；灵动岛只展示状态，不提供批准或拒绝操作。
 
 ## 开发
@@ -37,6 +39,7 @@ npm run dev:web
 
 ```bash
 npm run island -- push --agent Cursor --state running --title "正在修改登录页" --progress 0.4
+npm run island -- push --id vscode-task --agent Codex --client "VS Code" --state running --title "正在检查测试"
 npm run island -- end --result success --summary "登录页已更新"
 npm run island -- demo
 ```
@@ -56,6 +59,8 @@ curl -X POST http://127.0.0.1:17321/v1/activities/run-1/end \
 `state` 可以是 `thinking`、`running`、`waiting`、`approval`、`success`、`error`。同一个 `id` 再次 POST 会合并更新。`GET /v1/activities` 返回当前活动。`WS /v1/events` 会在每次变化时推送 `{ "type": "activities", "activities": [...] }`。
 
 多个活动同时存在时，按 agent 分组显示会话列表，点击各行查看详情。同一 agent 内按失败、需要审批、执行、思考、等待、成功排序。
+
+HTTP 可传 `client: "VS Code"`，CLI 使用 `--client "VS Code"` 显式指定来源。省略时保留已有值；传 `client: null` 或 `--client null` 清空；名称最多 40 个字符。
 
 可通过 CLI 显式推送操作和审批状态：
 
@@ -88,6 +93,8 @@ Windows 上这些目录在 `%USERPROFILE%` 下面，布局相同。可以用 `CL
 子 Agent 与后台命令在展开后单独列出，紧凑态显示运行数量。嵌套子 Agent 会逐层合并到顶层会话；仍有下级任务运行时保持执行状态。默认清理静默超过 30 分钟且缺少存活依据的后台任务，但原生忙碌登记或仍活跃的下级任务会保留对应任务。会话元数据尚未写完整时暂缓归类，后续扫描会重试。
 
 自动识别依赖各 agent 实际写出的日志。除可关联的 Claude 会话外，进程检测只能证明某种 agent 在运行，无法精确区分该进程下所有会话；缺少结束标记的旧日志仍可能被判断为活动。需要精确状态时可以使用 HTTP/CLI 推送。
+
+客户端识别同样按会话取证：Codex 使用 `session_meta` 中的来源，命令行显示「CLI」，兼容编辑器共享的扩展标识显示「IDE 扩展」。新版 Claude Code 使用原生会话登记的 PID 和进程祖先识别宿主，优先显示编辑器或终端应用，其次显示 PowerShell、cmd 等 Shell；进程退出后保留本次运行中观察到的来源。没有可靠信息时显示「未知客户端」，不会根据工具的 Shell、工作目录或同类 Agent 进程猜测。Cursor/Gemini 等没有可关联来源的记录可通过 HTTP/CLI 指定客户端。
 
 操作识别基于工具名称和记录的参数。读取 `SKILL.md` 表示「读取技能」，不代表能证明该技能后续的所有指令都已执行。MCP 支持直接工具调用和 `functions.exec` 中明确写出的静态 MCP 工具名；动态生成的调用名称无法可靠识别。审批识别支持明确的 Codex 审批请求、`sandbox_permissions: "require_escalated"` 请求和 Gemini 的等待审批状态；请求可能被原工具自动放行，后续执行或结果记录会更新状态。没有审批日志的会话不会根据等待时长或自然语言猜测为需要审批，可使用 `approval` 状态显式推送。
 

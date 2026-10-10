@@ -25,6 +25,18 @@ const launch = [
 const done = { type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: '构建在后台继续' }] } }
 
 describe('incremental transcript reader', () => {
+  it('retains metadata-only client records across appends and clears them on replacement', async () => {
+    const file = fileFor(jsonl([{ type: 'session_meta', payload: { id: 'native', originator: 'codex-tui', source: 'cli' } }]))
+    const reader = new SessionReader()
+    expect(await reader.read('codex', 'fallback', file, statSync(file).size)).toBeNull()
+    appendFileSync(file, jsonl([{ type: 'event_msg', payload: { type: 'task_started' } }]))
+    expect(await reader.read('codex', 'fallback', file, statSync(file).size)).toMatchObject({ sessionId: 'native', client: 'CLI' })
+    appendFileSync(file, jsonl([{ type: 'event_msg', payload: { type: 'task_complete' } }]))
+    expect(await reader.read('codex', 'fallback', file, statSync(file).size)).toMatchObject({ client: 'CLI', state: 'success' })
+    writeFileSync(file, jsonl([{ type: 'event_msg', payload: { type: 'task_started' } }]))
+    expect(await reader.read('codex', 'fallback', file, statSync(file).size)).toMatchObject({ sessionId: 'fallback', client: undefined })
+  })
+
   it.each([300_000, 4_500_000])('retains launches before %i bytes of subsequent output', async (length) => {
     const file = fileFor(jsonl([...launch, { type: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(length) }] } }, done]))
     const view = await readSession('claude', 'large', file, statSync(file).size)

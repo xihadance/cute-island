@@ -13,6 +13,8 @@ export function parseSession(plugin: AgentPlugin, sessionId: string, text: strin
   if (parsed.events.length === 0) return null
   return {
     id: activityId(plugin.kind, parsed.sessionId || sessionId),
+    sessionId: parsed.sessionId || sessionId,
+    client: parsed.client,
     agent: plugin.label,
     kind: plugin.kind,
     ...reduceEvents(parsed.events)

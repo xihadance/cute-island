@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { parseTranscript } from './parse'
 
 describe('parseTranscript', () => {
+  it.each([
+    [{ originator: 'codex-tui', source: 'cli' }, 'CLI'],
+    [{ originator: 'codex_vscode', source: 'vscode' }, 'IDE 扩展'],
+    [{ originator: 'unknown-app', source: 'unknown' }, undefined]
+  ])('uses Codex metadata without guessing a terminal or compatible editor', (meta, client) => {
+    const text = [
+      { type: 'session_meta', payload: { id: 'native-id', ...meta } },
+      { type: 'event_msg', payload: { type: 'task_started' } }
+    ].map((row) => JSON.stringify(row)).join('\n')
+    expect(parseTranscript('codex', 'file-id', text)).toMatchObject({ id: 'codex-native-id', sessionId: 'native-id', client })
+  })
+
   it('recognizes explicit completion in interactive Claude transcripts', () => {
     expect(parseTranscript('claude', 'completed', JSON.stringify({ type: 'assistant', message: {
       stop_reason: 'end_turn', content: [{ type: 'text', text: '已经完成' }]

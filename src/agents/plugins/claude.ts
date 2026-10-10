@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { cleanText, isRecord, jsonlRows, messageEvents, outputText, parseMaybeRecord, safeId, textOf } from '../events'
-import type { AgentEvent, AgentPlugin, ChildLink, ParsedTranscript } from '../types'
+import type { AgentEvent, AgentPlugin, ChildLink, ParsedTranscript, SessionRegistration } from '../types'
 
 /**
  * Claude Code: `~/.claude/projects/<project>/<session>.jsonl`.
@@ -20,7 +20,7 @@ export const claudePlugin: AgentPlugin = {
   executables: ['claude'],
   scripts: [/\/@anthropic-ai\/claude-code\//i],
   child: claudeChild,
-  liveSessions: (root) => activeClaudeSessions(path.join(root, '..', 'sessions'))
+  registeredSessions: (root) => registeredClaudeSessions(path.join(root, '..', 'sessions'))
 }
 
 const SPAWNED = new Set(['async_launched', 'teammate_spawned'])
@@ -152,25 +152,27 @@ async function claudeChild(file: string): Promise<ChildLink | null> {
 }
 
 /** Newer Claude versions register busy sessions by PID, including parked jobs. */
-async function activeClaudeSessions(root: string): Promise<Set<string>> {
-  const active = new Set<string>()
+async function registeredClaudeSessions(root: string): Promise<SessionRegistration[]> {
+  const registrations: SessionRegistration[] = []
   try {
     const files = (await readdir(root)).filter((name) => /^\d+\.json$/.test(name))
     await Promise.all(files.map(async (name) => {
       try {
         const file = path.join(root, name)
-        if ((await stat(file)).size > 64 * 1024) return
+        const info = await stat(file)
+        if (info.size > 64 * 1024) return
         const row = parseMaybeRecord(await readFile(file, 'utf8'))
         if (row.pid !== Number(path.basename(name, '.json'))) return
-        if (row.status !== 'busy' && row.status !== 'waiting') return
         const pid = Number(row.pid)
         if (!Number.isSafeInteger(pid) || pid <= 0) return
         process.kill(pid, 0)
         for (const id of [row.sessionId, row.parkedJobId]) {
-          if (typeof id === 'string' && /^[A-Za-z0-9-]{8,}$/.test(id)) active.add(id)
+          if (typeof id === 'string' && /^[A-Za-z0-9-]{8,}$/.test(id)) {
+            registrations.push({ sessionId: id, pid, busy: row.status === 'busy' || row.status === 'waiting', updatedAt: info.mtimeMs })
+          }
         }
       } catch { /* Stale registrations and partial writes are expected. */ }
     }))
   } catch { /* Older Claude versions do not have a session registry. */ }
-  return active
+  return registrations
 }

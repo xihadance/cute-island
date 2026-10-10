@@ -4,6 +4,9 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ActivityStore } from '../shared/activity'
 import type { AgentKind } from './parse'
+import { claudePlugin } from './plugins'
+import type { ProcessSnapshot } from './processes'
+import type { SessionRegistration } from './types'
 import { SessionWatcher, matchAgentProcesses, readSession, type AgentRoots } from './watch'
 
 const NOW = Date.parse('2026-10-09T08:00:00Z')
@@ -18,6 +21,66 @@ describe('SessionWatcher', () => {
   afterEach(() => {
     for (const store of stores) store.dispose()
     stores.length = 0
+  })
+
+  it('publishes per-session hosts and client-only changes without re-reading transcripts', async () => {
+    const { roots } = tempHome()
+    for (const id of ['one', 'two', 'unknown']) {
+      const file = path.join(roots.claude, 'project', `${id}.jsonl`)
+      writeJsonl(file, [{ type: 'user', message: { content: '继续任务' } }])
+      touch(file, NOW)
+    }
+    let registrations: SessionRegistration[] = [
+      { sessionId: 'one', pid: 11, busy: false, updatedAt: NOW },
+      { sessionId: 'two', pid: 12, busy: false, updatedAt: NOW }
+    ]
+    const snapshot: ProcessSnapshot = { running: new Set(['claude']), processes: [
+      { pid: 11, parentPid: 21, name: 'claude.exe', commandLine: '' },
+      { pid: 12, parentPid: 22, name: 'claude.exe', commandLine: '' },
+      { pid: 21, parentPid: 0, name: 'Code.exe', commandLine: '' },
+      { pid: 22, parentPid: 23, name: 'pwsh.exe', commandLine: '' },
+      { pid: 23, parentPid: 0, name: 'WindowsTerminal.exe', commandLine: '' }
+    ] }
+    const store = newStore()
+    const read = vi.fn(readSession)
+    const watcher = new SessionWatcher(store, { roots, now: () => NOW, processMs: 0, readSession: read,
+      plugins: [{ ...claudePlugin, registeredSessions: async () => registrations }], listProcessSnapshot: () => snapshot })
+    await watcher.scan()
+    expect(store.get('claude-one')?.client).toBe('VS Code')
+    expect(store.get('claude-two')?.client).toBe('Windows Terminal')
+    expect(store.get('claude-unknown')?.client).toBeUndefined()
+    const notifications = vi.fn()
+    store.subscribe(notifications)
+    snapshot.processes[2].name = 'Cursor.exe'
+    await watcher.scan()
+    expect(store.get('claude-one')?.client).toBe('Cursor')
+    expect(notifications).toHaveBeenCalledTimes(1)
+    expect(read).toHaveBeenCalledTimes(3)
+    registrations = []
+    snapshot.processes = []
+    await watcher.scan()
+    expect(store.get('claude-one')?.client).toBe('Cursor')
+  })
+
+  it('does not use stale registrations or unrelated executables to label a session', async () => {
+    const { roots } = tempHome()
+    const file = path.join(roots.claude, 'project', 'stale.jsonl')
+    writeJsonl(file, [{ type: 'user', message: { content: '继续任务' } }])
+    touch(file, NOW)
+    const snapshot: ProcessSnapshot = { running: new Set(), processes: [
+      { pid: 11, parentPid: 21, name: 'claude.exe', commandLine: '', createdAt: NOW + 1000 },
+      { pid: 21, parentPid: 0, name: 'Code.exe', commandLine: '' }
+    ] }
+    const store = newStore()
+    const watcher = new SessionWatcher(store, { roots, now: () => NOW, processMs: 0,
+      plugins: [{ ...claudePlugin, registeredSessions: async () => [{ sessionId: 'stale', pid: 11, busy: false, updatedAt: NOW }] }],
+      listProcessSnapshot: () => snapshot })
+    await watcher.scan()
+    expect(store.get('claude-stale')?.client).toBeUndefined()
+    snapshot.processes[0].createdAt = NOW - 1000
+    snapshot.processes[0].name = 'unrelated.exe'
+    await watcher.scan()
+    expect(store.get('claude-stale')?.client).toBeUndefined()
   })
 
   it('notifies while Claude is editing and Codex is waiting, then records success once', async () => {

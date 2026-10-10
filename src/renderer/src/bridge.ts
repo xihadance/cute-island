@@ -111,14 +111,14 @@ function createMockBridge(): IslandApi {
     simulateCapabilities() {
       demoToken += 1
       store.clear()
-      store.upsert({ id: 'cap-command', agent: 'Codex', state: 'running', title: '运行类型检查',
+      store.upsert({ id: 'cap-command', agent: 'Codex', client: 'Windows Terminal', state: 'running', title: '运行类型检查',
         operation: { kind: 'command', name: 'exec_command', shell: 'cmd', command: 'cmd /c npm run typecheck', cwd: 'D:\\projects\\cute-island' },
         steps: [{ id: 'read', label: '读取项目配置', kind: 'read', status: 'done' }, { id: 'check', label: '检查 TypeScript 类型', kind: 'command', status: 'active' }] })
-      store.upsert({ id: 'cap-mcp', agent: 'Claude Code', state: 'running', title: '获取组件文档',
+      store.upsert({ id: 'cap-mcp', agent: 'Claude Code', client: 'VS Code', state: 'running', title: '获取组件文档',
         operation: { kind: 'mcp', name: 'context7 / query_docs' } })
       store.upsert({ id: 'cap-skill', agent: 'Gemini', state: 'running', title: '读取界面设计技能',
         operation: { kind: 'skill', name: 'frontend-design' } })
-      store.upsert({ id: 'cap-agent', agent: 'Cursor', state: 'running', title: '子 Agent 正在检查测试',
+      store.upsert({ id: 'cap-agent', agent: 'Cursor', client: 'Cursor', state: 'running', title: '子 Agent 正在检查测试',
         operation: { kind: 'agent', name: 'review_tests' } })
     },
     simulateTasks() {

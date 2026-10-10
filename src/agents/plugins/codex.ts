@@ -65,8 +65,16 @@ function createCodexParser(): (text: string) => ParsedTranscript {
 
   const parse = (text: string): ParsedTranscript => {
     events = []
+    let sessionId: string | undefined
+    let client: string | undefined
     for (const row of jsonlRows(text)) {
       if (!isRecord(row)) continue
+      if (row.type === 'session_meta') {
+        const meta = isRecord(row.payload) ? row.payload : {}
+        sessionId = textOf(meta.id) || undefined
+        client = codexClient(meta)
+        continue
+      }
       if (row.type === 'event_msg') {
         const payload = isRecord(row.payload) ? row.payload : {}
         const type = textOf(payload.type)
@@ -78,10 +86,10 @@ function createCodexParser(): (text: string) => ParsedTranscript {
         events.push(...responseItem(isRecord(row.payload) ? row.payload : {}))
         continue
       }
-      if (row.type === 'session_meta' || row.type === 'turn_context') continue
+      if (row.type === 'turn_context') continue
       events.push(...messageEvents(row))
     }
-    return { events }
+    return { events, sessionId, client }
   }
   return parse
 
@@ -157,6 +165,14 @@ function createCodexParser(): (text: string) => ParsedTranscript {
     open.add(taskId)
     return [{ kind: 'task_start', taskId, task: 'command', label: call.title }]
   }
+}
+
+function codexClient(meta: Record<string, unknown>): string | undefined {
+  const originator = textOf(meta.originator).toLowerCase()
+  // The VS Code extension also runs in compatible editors, so it cannot prove the host.
+  if (originator === 'codex_vscode' || meta.source === 'vscode') return 'IDE 扩展'
+  if (originator === 'codex-tui' || originator === 'codex_exec' || meta.source === 'cli' || meta.source === 'exec') return 'CLI'
+  return undefined
 }
 
 function codexEvent(payload: Record<string, unknown>): AgentEvent[] {

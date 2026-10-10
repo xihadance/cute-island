@@ -45,6 +45,8 @@ export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
 export interface Activity {
   id: string
   agent: string
+  /** Host client, separate from the agent and the tool's shell. */
+  client?: string
   state: ActivityState
   title: string
   detail?: string
@@ -60,6 +62,7 @@ export interface Activity {
 export interface ActivityInput {
   id: string
   agent?: string
+  client?: string | null
   state?: ActivityState
   title?: string
   detail?: string | null
@@ -174,6 +177,7 @@ export function operationHeight(operation: ActivityOperation): number {
 interface ParsedActivity {
   id: string
   agent?: string
+  client?: string | null
   state?: ActivityState
   title?: string
   clearDetail: boolean
@@ -222,6 +226,7 @@ export class ActivityStore {
     const next: Activity = {
       id: parsed.id,
       agent: parsed.agent ?? current?.agent ?? 'Agent',
+      client: parsed.client === null ? undefined : parsed.client ?? current?.client,
       state,
       title: parsed.title ?? current?.title ?? defaultTitle(state),
       detail: resolveDetail(parsed, current),
@@ -374,6 +379,11 @@ export function parseActivityInput(input: unknown): ParsedActivity {
   if ('state' in body && body.state !== undefined) {
     if (!isActivityState(body.state)) throw new ActivityError(400, 'state 无效')
     parsed.state = body.state
+  }
+  if ('client' in body && body.client !== undefined) {
+    if (body.client === null) parsed.client = null
+    else if (typeof body.client === 'string' && body.client.trim()) parsed.client = clip(body.client, 40)
+    else throw new ActivityError(400, 'client 无效')
   }
   if ('title' in body && body.title !== undefined) {
     if (typeof body.title !== 'string' || !body.title.trim()) {

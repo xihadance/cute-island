@@ -130,10 +130,11 @@ async function smoke() {
       const result = await send('Page.captureScreenshot', { format: 'png' })
       await fs.writeFile(`output/playwright/${name}.png`, Buffer.from(result.data, 'base64'))
     }
-    await push({ id: 'drag', agent: 'Codex', state: 'running', title: '拖动与透明度验证', operation: { kind: 'command', command: 'npm run typecheck', shell: 'cmd' },
+    await push({ id: 'drag', agent: 'Codex', client: 'Windows Terminal', state: 'running', title: '拖动与透明度验证', operation: { kind: 'command', command: 'npm run typecheck', shell: 'cmd' },
       tasks: [{ id: 'child', kind: 'agent', label: '检查代码', status: 'active', detail: '读取组件' },
         { id: 'command', kind: 'command', label: '类型检查', status: 'done' }] })
     assert.equal(await evaluate('document.querySelector(".task-badge").textContent.trim()'), '1')
+    assert.equal(await evaluate('document.querySelector(".client-label").textContent'), 'Windows Terminal')
     await until(async () => (await opacity()) < 0.7)
     await screenshot('drag-translucent')
     const original = pointOf((await getWindow()).bounds)
@@ -147,6 +148,7 @@ async function smoke() {
     await until(async () => (await opacity()) < 0.7)
     await click('.island')
     assert.equal(await mode(), 'expanded', 'A light click expands the capsule')
+    assert.equal(await evaluate('document.querySelector(".client-label").textContent'), 'Windows Terminal')
     assert.equal(await evaluate('document.querySelectorAll(".tasks li").length'), 2)
     assert.equal(await evaluate('document.querySelectorAll(".tasks li[data-status=active]").length'), 1)
     assert.deepEqual(pointOf((await getWindow()).bounds), original, 'A click does not move the window')
@@ -171,6 +173,14 @@ async function smoke() {
     let saved = JSON.parse(await fs.readFile(path.join(profile, 'window-position.json'), 'utf8'))
     assert.deepEqual(saved, pointOf((await getWindow()).bounds))
     await push({ id: 'second', agent: 'Gemini', state: 'thinking', title: '第二个会话' })
+    assert.equal(await evaluate('document.querySelector("[data-session=second] .client-label").textContent'), '未知客户端')
+    await push({ id: 'second', client: 'VS Code' })
+    assert.equal(await evaluate('document.querySelector("[data-session=second] .client-label").textContent'), 'VS Code')
+    assert.equal(await evaluate('document.querySelector("[data-session=drag] .client-label").textContent'), 'Windows Terminal')
+    await screenshot('client-sessions')
+    await push({ id: 'second', client: 'A custom client with a very long name that is truncated' })
+    assert.ok(await evaluate('Array.from(document.querySelectorAll(".session-line")).every(row => row.scrollWidth <= row.clientWidth)'), 'Long client labels stay inside session rows')
+    await push({ id: 'second', client: 'VS Code' })
     await drag('[data-session=drag] .session-line', { x: -30, y: 40 })
     assert.equal(await evaluate('document.querySelectorAll(".session-row.open").length'), 0, 'Dragging a session does not select it')
     await click('[data-session=drag] .session-line')
@@ -197,7 +207,7 @@ async function smoke() {
     const reset = (await getWindow()).bounds
     assert.equal(reset.x, Math.round(area.x + (area.width - reset.width) / 2))
     assert.equal(reset.y, area.y + 4)
-    console.log(JSON.stringify({ result: 'passed', taskDisplay: true, nativeDrag: true, clickVsDrag: true, commandSelection: true, transparency: true, edgeExpansion: true, restartPersistence: true, trayReset: true, rendererErrors: errors }))
+    console.log(JSON.stringify({ result: 'passed', clientLabels: true, taskDisplay: true, nativeDrag: true, clickVsDrag: true, commandSelection: true, transparency: true, edgeExpansion: true, restartPersistence: true, trayReset: true, rendererErrors: errors }))
   } catch (error) {
     console.error(logs.slice(-2000)); throw error
   } finally {

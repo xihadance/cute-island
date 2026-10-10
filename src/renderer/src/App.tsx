@@ -143,7 +143,7 @@ export function App() {
     <>
       <div className="stage" onMouseDown={collapseFromOutside}>
         <div className="sr-only" aria-live="polite">
-          {activities.length > 0 ? activities.map((item) => `${item.agent} ${STATE_LABEL[item.state]} ${item.title}`).join('，') : '空闲'}
+          {activities.length > 0 ? activities.map((item) => `${item.agent}，${item.client ?? '未知客户端'}，${STATE_LABEL[item.state]} ${item.title}`).join('，') : '空闲'}
         </div>
         <Island
           bridge={bridge}
